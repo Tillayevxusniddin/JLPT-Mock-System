@@ -81,7 +81,6 @@ class Organization(TimeStampedModel):
     def is_trial(self):
         return self.status == self.Status.TRIAL
 
-
 class Subscription(TimeStampedModel):
     """
     Subscription Plans for Organizations

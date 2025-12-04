@@ -1,52 +1,40 @@
-"""
-Core Models - Base models for multi-tenancy
-"""
 import uuid
 from django.db import models
-from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
+from .managers import SoftDeleteManager, GlobalManager
 
+class UUIDModel(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    class Meta:
+        abstract = True
 
 class TimeStampedModel(models.Model):
-    """
-    Abstract base model with created_at and updated_at fields
-    """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    created_at = models.DateTimeField(_('created at'), auto_now_add=True, db_index=True)
-    updated_at = models.DateTimeField(_('updated at'), auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        abstract = True
+
+class SoftDeleteModel(models.Model):
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    
+    objects = SoftDeleteManager()
+    all_objects = GlobalManager()
     
     class Meta:
         abstract = True
-        ordering = ['-created_at']
 
-
-class TenantBaseModel(TimeStampedModel):
-    """
-    Base model for all tenant-specific models
-    Automatically filters by organization
-    """
-    # Organization ID - har bir model organizatsiyaga tegishli
-    organization_id = models.UUIDField(
-        _('organization'),
-        db_index=True,
-        help_text=_('Organization this record belongs to')
-    )
-    
-    # Soft delete
-    is_deleted = models.BooleanField(_('is deleted'), default=False, db_index=True)
-    deleted_at = models.DateTimeField(_('deleted at'), null=True, blank=True)
-    
-    class Meta:
-        abstract = True
-    
     def soft_delete(self):
-        """Soft delete the record"""
-        from django.utils import timezone
-        self.is_deleted = True
         self.deleted_at = timezone.now()
-        self.save(update_fields=['is_deleted', 'deleted_at', 'updated_at'])
-    
+        self.save(update_fields=["deleted_at"])
+
     def restore(self):
-        """Restore soft-deleted record"""
-        self.is_deleted = False
         self.deleted_at = None
-        self.save(update_fields=['is_deleted', 'deleted_at', 'updated_at'])
+        self.save(update_fields=["deleted_at"])
+
+class BaseModel(UUIDModel, TimeStampedModel, SoftDeleteModel):
+    """
+    Loyiha uchun asosiy model. 
+    Barcha yangi modellar shundan meros olishi kerak (User va Tenantdan tashqari).
+    """
+    class Meta:
+        abstract = True

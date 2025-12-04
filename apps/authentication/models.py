@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from django.core.validators import RegexValidator
 
 from apps.core.models import TimeStampedModel
+from .managers import UserManager
 
 
 class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
@@ -45,16 +46,18 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         choices=Role.choices,
         db_index=True
     )
-    organization_id = models.UUIDField(
-        _('organization'),
+    organization = models.ForeignKey(
+        'organizations.Organization',
+        on_delete=models.SET_NULL, 
         null=True,
         blank=True,
-        db_index=True,
+        related_name='users',
         help_text=_('Organization the user belongs to (null for OWNER)')
     )
     
     # Status
     is_active = models.BooleanField(_('active'), default=True)
+    is_approved = models.BooleanField(_('approved'), default=False)
     is_staff = models.BooleanField(_('staff status'), default=False)
     is_email_verified = models.BooleanField(_('email verified'), default=False)
     
@@ -66,6 +69,8 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     language = models.CharField(_('language'), max_length=10, default='en')
     timezone = models.CharField(_('timezone'), max_length=50, default='UTC')
     
+    objects = UserManager()
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name', 'role']
     
