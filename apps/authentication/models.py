@@ -111,12 +111,18 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
 class UserProfile(TimeStampedModel):
     """
-    Extended user profile information
+    Common fields for all users
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    
-    # Student-specific fields
-    student_id = models.CharField(_('student ID'), max_length=50, blank=True)
+    address = models.TextField(_('address'), blank=True)
+    city = models.CharField(_('city'), max_length=100, blank=True)
+    bio = models.TextField(_('biography'), blank=True)
+    emergency_contact_name = models.CharField(_('emergency contact name'), max_length=150, blank=True)
+    emergency_contact_phone = models.CharField(_('emergency contact phone'), max_length=20, blank=True)
+
+    """
+    Student's fields 
+    """
     enrollment_date = models.DateField(_('enrollment date'), null=True, blank=True)
     current_level = models.CharField(
         _('current JLPT level'),
@@ -128,27 +134,20 @@ class UserProfile(TimeStampedModel):
             ('N2', 'N2'),
             ('N1', 'N1'),
         ],
-        blank=True
+        blank=True,
+        null=True
     )
-    
-    # Teacher-specific fields
-    bio = models.TextField(_('biography'), blank=True)
-    specialization = models.CharField(_('specialization'), max_length=255, blank=True)
+
+    """
+    Teacher's fields 
+    """
     years_of_experience = models.PositiveIntegerField(_('years of experience'), default=0)
-    
-    # Contact & Social
-    address = models.TextField(_('address'), blank=True)
-    city = models.CharField(_('city'), max_length=100, blank=True)
-    country = models.CharField(_('country'), max_length=100, blank=True)
-    
-    # Additional info
-    emergency_contact_name = models.CharField(_('emergency contact name'), max_length=150, blank=True)
-    emergency_contact_phone = models.CharField(_('emergency contact phone'), max_length=20, blank=True)
-    
+
     class Meta:
         db_table = 'user_profiles'
         verbose_name = _('user profile')
         verbose_name_plural = _('user profiles')
-    
+
     def __str__(self):
-        return f"Profile of {self.user.get_full_name()}"
+        return f"Profile of {self.user.email}"
+    

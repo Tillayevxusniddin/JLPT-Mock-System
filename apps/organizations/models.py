@@ -4,6 +4,7 @@ Organization Models - Multi-tenant management
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
+from django.core.validators import RegexValidator
 
 from apps.core.models import TimeStampedModel
 
@@ -64,6 +65,21 @@ class Organization(TimeStampedModel):
     # Features
     features = models.JSONField(_('enabled features'), default=dict, blank=True)
     
+    schema_name = models.CharField(
+        _('schema name'), 
+        max_length=63, 
+        unique=True, 
+        db_index=True,
+        validators=[RegexValidator(r'^[a-z0-9_]+$', 'Only lowercase letters, numbers, and underscores.')]
+    )
+
+    def save(self, *args, **kwargs):
+        if not self.schema_name:
+            safe_slug = self.slug.replace('-', '_') if self.slug else f"org_{self.id.hex[:8]}"
+            self.schema_name = f"tenant_{safe_slug}"
+            
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'organizations'
         verbose_name = _('organization')

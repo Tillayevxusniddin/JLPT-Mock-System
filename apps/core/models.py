@@ -38,3 +38,11 @@ class BaseModel(UUIDModel, TimeStampedModel, SoftDeleteModel):
     """
     class Meta:
         abstract = True
+
+class TenantBaseModel(UUIDModel, TimeStampedModel, SoftDeleteModel):
+    """
+    Base model for tenant-scoped data.
+    All models that belong to a specific organization should inherit from this.
+    """    
+    class Meta:
+        abstract = True

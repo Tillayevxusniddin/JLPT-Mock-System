@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
+from django.conf import settings
 
 def custom_exception_handler(exc, context):
     if isinstance(exc, DjangoValidationError):
@@ -18,9 +19,12 @@ def custom_exception_handler(exc, context):
             "errors": response.data
         }, status=response.status_code)
     
-    # 500 xatolar uchun
+    error_message = "Internal server error"
+    if settings.DEBUG:
+        error_message = str(exc)
+        
     return Response({
         "status": "error",
         "code": 500,
-        "message": str(exc), # Productionda buni yashirish kerak
+        "message": error_message,
     }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -1,54 +1,88 @@
+import re
 import contextvars
 from django.db import connection
 from contextlib import contextmanager
 
-# 1. Context Variable - Thread/Async safe storage
-# Bu global o'zgaruvchi, lekin har bir request uchun alohida ishlaydi.
+try:
+    from psycopg2 import sql
+except ImportError:
+    # Fallback for non-PostgreSQL databases (testing with SQLite)
+    sql = None
+
+
+SCHEMA_NAME_REGEX = re.compile(r'^[a-z0-9_]+$')
+MAX_SCHEMA_NAME_LENGTH = 63  # PostgreSQL identifier limit
+
 _current_schema = contextvars.ContextVar("current_schema", default="public")
 
 def get_current_schema():
-    """Joriy schemani qaytaradi"""
+    """Get the current schema name from context"""
     return _current_schema.get()
 
 def set_tenant_schema(schema_name):
     """
-    PostgreSQL da search_path ni o'zgartiradi.
-    Har doim 'public' ni oxiriga qo'shamiz, shunda umumiy jadvallar (User, Tenant) ko'rinib turadi.
+    Set PostgreSQL search_path to tenant schema.
+    Uses psycopg2.sql.Identifier for SQL injection protection.
     """
-    # SQL Injection oldini olish uchun oddiy tekshiruv
-    if not schema_name.isalnum() and "_" not in schema_name:
-         raise ValueError(f"Invalid schema name: {schema_name}")
+    # Strict validation
+    if not SCHEMA_NAME_REGEX.match(schema_name):
+        raise ValueError(f"Invalid schema name: {schema_name}")
+    
+    # PostgreSQL identifier length limit
+    if len(schema_name) > MAX_SCHEMA_NAME_LENGTH:
+        raise ValueError(f"Schema name too long (max {MAX_SCHEMA_NAME_LENGTH}): {schema_name}")
 
     with connection.cursor() as cursor:
-        # search_path ni o'zgartirish
-        # Masalan: SET search_path TO org_123, public
-        cursor.execute(f"SET search_path TO {schema_name}, public")
-        
-    # Context dagi qiymatni yangilaymiz
+        if sql:
+            # Use psycopg2.sql.Identifier for safe schema name handling
+            cursor.execute(
+                sql.SQL("SET search_path TO {}, public").format(
+                    sql.Identifier(schema_name)
+                )
+            )
+        else:
+            # Fallback for testing (already validated by regex)
+            cursor.execute(f"SET search_path TO {schema_name}, public")
+    
     _current_schema.set(schema_name)
 
 def set_public_schema():
-    """Schemani public holatga qaytaradi"""
+    """Reset PostgreSQL search_path to public schema"""
     with connection.cursor() as cursor:
         cursor.execute("SET search_path TO public")
     _current_schema.set("public")
 
+def reset_tenant_schema():
+    """
+    Alias for set_public_schema().
+    Resets the database connection to the public schema.
+    """
+    set_public_schema()
+
+def schema_exists(schema_name):
+    """
+    Check if a schema exists in the database.
+    Returns True if exists, False otherwise.
+    """
+    if not SCHEMA_NAME_REGEX.match(schema_name):
+        return False
+    
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            SELECT EXISTS(
+                SELECT 1 FROM information_schema.schemata 
+                WHERE schema_name = %s
+            )
+        """, [schema_name])
+        return cursor.fetchone()[0]
+
 @contextmanager
 def schema_context(schema_name):
-    """
-    Context manager - vaqtinchalik schema o'zgartirish uchun.
-    Foydalanish:
-    with schema_context('org_test'):
-        # bu yerdagi querylar org_test ichida bo'ladi
-        pass
-    # bu yerda yana eski holatiga qaytadi
-    """
     previous_schema = get_current_schema()
     try:
         set_tenant_schema(schema_name)
         yield
     finally:
-        # Ish tugagach, avvalgi schemani tiklaymiz
         if previous_schema == "public":
             set_public_schema()
         else:

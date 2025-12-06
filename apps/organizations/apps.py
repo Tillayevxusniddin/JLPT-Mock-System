@@ -6,3 +6,4 @@ class OrganizationsConfig(AppConfig):
 
     def ready(self):
         import apps.organizations.signals
+        import apps.organizations.file_signals  # Register file cleanup signals

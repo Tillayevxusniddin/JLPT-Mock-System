@@ -26,6 +26,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
         extra_fields.setdefault('role', 'OWNER') # Superuser doim OWNER
+        extra_fields.setdefault('is_approved', True) # Superuser auto-approved
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError(_('Superuser must have is_staff=True.'))
@@ -33,7 +34,3 @@ class UserManager(BaseUserManager):
             raise ValueError(_('Superuser must have is_superuser=True.'))
 
         return self.create_user(email, password, **extra_fields)
-    
-    def get_queryset(self):
-        # Soft delete logikasi
-        return super().get_queryset().filter(deleted_at__isnull=True)

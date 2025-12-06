@@ -37,7 +37,7 @@ db.sqlite3-journal
 /static
 
 # Environment variables
-.env.local
+.env
 .env.prod
 
 # IDE
@@ -80,3 +80,5 @@ Thumbs.db
 
 # Docker
 *.env.docker
+
+*.md
