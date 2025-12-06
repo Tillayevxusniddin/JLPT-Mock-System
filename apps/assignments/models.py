@@ -1,182 +1,133 @@
 """
-Assignments Models - Assigning tests to students
+Assignments Models - Assigning tests to students (Tenant Schema)
 """
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from apps.core.models import TenantBaseModel
 
-
 class Assignment(TenantBaseModel):
     """
-    Assignment of Mock Test to Students or Groups
-    Teacher assigns test to either:
-    1. Entire group
-    2. Individual student
+    Imtihon yoki Quizni guruhga/talabaga tayinlash.
     """
     
     class AssignmentType(models.TextChoices):
         GROUP = 'GROUP', _('Group Assignment')
         INDIVIDUAL = 'INDIVIDUAL', _('Individual Assignment')
-    
-    # Test to assign
+
+    class Status(models.TextChoices):
+        SCHEDULED = 'SCHEDULED', _('Scheduled') # Rejalashtirilgan
+        IN_PROGRESS = 'IN_PROGRESS', _('In Progress (Started)') # O'qituvchi start bosdi
+        COMPLETED = 'COMPLETED', _('Completed') # Tugadi
+        CANCELLED = 'CANCELLED', _('Cancelled') # Bekor qilindi
+
+    # --- CONTENT (Nima topshiriladi?) ---
+    # MockTest (Foreign Key Tenant ichida bo'lgani uchun ishlaydi)
     mock_test = models.ForeignKey(
         'mock_tests.MockTest',
         on_delete=models.CASCADE,
-        related_name='assignments'
+        related_name='assignments',
+        null=True, blank=True
     )
     
-    # Assignment type
-    assignment_type = models.CharField(
-        _('assignment type'),
-        max_length=20,
-        choices=AssignmentType.choices,
-        db_index=True
+    # YANGI: Quiz (Foreign Key Tenant ichida)
+    quiz = models.ForeignKey(
+        'mock_tests.Quiz',
+        on_delete=models.CASCADE,
+        related_name='assignments',
+        null=True, blank=True
     )
+
+    # --- TARGET (Kimga?) ---
+    assignment_type = models.CharField(max_length=20, choices=AssignmentType.choices, db_index=True)
     
-    # Target (either group or student)
+    # Group (Tenant ichida bo'lgani uchun FK ishlaydi)
     group = models.ForeignKey(
         'groups.Group',
         on_delete=models.CASCADE,
-        null=True,
-        blank=True,
+        null=True, blank=True,
         related_name='assignments'
     )
-    student = models.ForeignKey(
-        'authentication.User',
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name='individual_assignments',
-        limit_choices_to={'role': 'STUDENT'}
-    )
     
-    # Assignment details
-    title = models.CharField(
-        _('assignment title'),
-        max_length=255,
-        blank=True,
-        help_text=_('Custom title for this assignment')
-    )
-    instructions = models.TextField(
-        _('instructions'),
-        blank=True,
-        help_text=_('Additional instructions for students')
-    )
+    # Student (Public Schemada bo'lgani uchun UUID ishlatamiz!)
+    student_id = models.UUIDField(null=True, blank=True, db_index=True)
     
-    # Creator
-    assigned_by = models.ForeignKey(
-        'authentication.User',
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name='created_assignments',
-        limit_choices_to={'role__in': ['TEACHER', 'CENTERADMIN']}
-    )
+    # Creator (Public Schemada bo'lgani uchun UUID!)
+    assigned_by_id = models.UUIDField(null=True, blank=True)
+
+    # --- DETAILS ---
+    title = models.CharField(max_length=255, blank=True, help_text=_("Custom title (e.g. 'N5 Final Exam')"))
+    instructions = models.TextField(blank=True)
     
-    # Timing
-    start_date = models.DateTimeField(_('start date'))
-    due_date = models.DateTimeField(_('due date'))
+    # --- TIMING ---
+    # Rejalashtirilgan vaqt (O'quvchiga ko'rinadi: "9:00 da bo'ladi")
+    scheduled_start = models.DateTimeField(_('scheduled start'))
     
-    # Settings
-    allow_retake = models.BooleanField(
-        _('allow retake'),
-        default=False,
-        help_text=_('Can students retake this test?')
-    )
-    max_attempts = models.PositiveIntegerField(
-        _('maximum attempts'),
-        default=1,
-        help_text=_('How many times can students attempt this test')
-    )
+    # Haqiqiy boshlangan vaqt (O'qituvchi tugmani bosganda yoziladi)
+    actual_start = models.DateTimeField(_('actual start'), null=True, blank=True)
     
-    show_answers_after_submit = models.BooleanField(
-        _('show answers after submit'),
-        default=True
-    )
-    show_score_immediately = models.BooleanField(
-        _('show score immediately'),
-        default=True
-    )
-    
-    randomize_questions = models.BooleanField(
-        _('randomize questions'),
-        default=False,
-        help_text=_('Shuffle question order')
-    )
-    randomize_choices = models.BooleanField(
-        _('randomize choices'),
-        default=False,
-        help_text=_('Shuffle answer choices')
-    )
-    
-    # Statistics (cached)
-    total_students = models.PositiveIntegerField(_('total students'), default=0)
-    submitted_count = models.PositiveIntegerField(_('submitted count'), default=0)
-    average_score = models.DecimalField(
-        _('average score'),
-        max_digits=5,
-        decimal_places=2,
-        default=0
-    )
-    pass_rate = models.DecimalField(
-        _('pass rate'),
-        max_digits=5,
-        decimal_places=2,
-        default=0
-    )
+    # Tugash muddati (Deadline)
+    deadline = models.DateTimeField(_('deadline'), null=True, blank=True)
     
     # Status
-    is_active = models.BooleanField(_('active'), default=True, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED, db_index=True)
+
+    # --- SETTINGS ---
+    allow_retake = models.BooleanField(default=False)
+    max_attempts = models.PositiveIntegerField(default=1)
     
+    show_score_immediately = models.BooleanField(default=False) 
+    show_answers_after_submit = models.BooleanField(default=False)
+    
+    randomize_questions = models.BooleanField(default=False)
+    
+    # --- STATS (Denormalization) ---
+    total_assigned_students = models.PositiveIntegerField(default=0)
+    submitted_count = models.PositiveIntegerField(default=0)
+    average_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
     class Meta:
         db_table = 'assignments'
-        verbose_name = _('assignment')
-        verbose_name_plural = _('assignments')
-        ordering = ['-created_at']
+        ordering = ['-scheduled_start']
         indexes = [
-            models.Index(fields=['organization_id', 'is_active']),
-            models.Index(fields=['group', 'start_date']),
-            models.Index(fields=['student', 'start_date']),
-            models.Index(fields=['assigned_by', 'created_at']),
-            models.Index(fields=['due_date']),
+            models.Index(fields=['status', 'scheduled_start']),
         ]
-    
+
     def __str__(self):
-        if self.assignment_type == self.AssignmentType.GROUP:
-            target = f"Group: {self.group.name}"
-        else:
-            target = f"Student: {self.student.get_full_name()}"
-        return f"{self.mock_test.title} → {target}"
-    
+        # Nomini aniqlash (Mock yoki Quiz)
+        content_name = "Unknown"
+        if self.mock_test:
+            content_name = self.mock_test.title
+        elif self.quiz:
+            content_name = f"Quiz: {self.quiz.title}"
+            
+        target = self.group.name if self.group else "Student"
+        return f"{content_name} → {target} ({self.status})"
+
     def clean(self):
-        """Validate assignment"""
-        super().clean()
+        # 1. Target validation (Guruh yoki Student)
+        if self.assignment_type == self.AssignmentType.GROUP and not self.group:
+            raise ValidationError("Group assignment must have a group.")
+        if self.assignment_type == self.AssignmentType.INDIVIDUAL and not self.student_id:
+            raise ValidationError("Individual assignment must have a student_id.")
+            
+        # 2. Content validation (MockTest yoki Quiz - XOR logic)
+        if not self.mock_test and not self.quiz:
+            raise ValidationError("Assignment must have either a MockTest or a Quiz.")
         
-        # Validate dates
-        if self.start_date and self.due_date:
-            if self.due_date <= self.start_date:
-                raise ValidationError(_('Due date must be after start date'))
-        
-        # Validate assignment target
-        if self.assignment_type == self.AssignmentType.GROUP:
-            if not self.group or self.student:
-                raise ValidationError(
-                    _('Group assignment must have a group and no student')
-                )
-        elif self.assignment_type == self.AssignmentType.INDIVIDUAL:
-            if self.group or not self.student:
-                raise ValidationError(
-                    _('Individual assignment must have a student and no group')
-                )
-    
-    def get_assigned_students(self):
-        """Get list of student IDs this assignment applies to"""
-        if self.assignment_type == self.AssignmentType.GROUP:
-            return list(
-                self.group.memberships
-                .filter(status='ACTIVE')
-                .values_list('student_id', flat=True)
-            )
-        else:
-            return [self.student.id]
+        if self.mock_test and self.quiz:
+            raise ValidationError("Assignment cannot have both MockTest and Quiz.")
+
+    def start_exam(self):
+        """O'qituvchi imtihonni boshlaganda chaqiriladi"""
+        if self.status == self.Status.SCHEDULED:
+            self.status = self.Status.IN_PROGRESS
+            self.actual_start = timezone.now()
+            self.save()
+            
+    def close_exam(self):
+        """Imtihonni tugatish"""
+        self.status = self.Status.COMPLETED
+        self.save()

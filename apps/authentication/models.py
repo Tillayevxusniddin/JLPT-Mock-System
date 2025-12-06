@@ -15,7 +15,17 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     """
     Custom User Model
     Supports multiple roles: OWNER, CENTERADMIN, TEACHER, STUDENT
+    
+    ✅ Uses UUID as Primary Key for multi-tenant architecture consistency
     """
+    
+    # Primary Key - UUID for cross-schema compatibility
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_('Unique identifier for user across all schemas')
+    )
     
     class Role(models.TextChoices):
         OWNER = 'OWNER', _('Platform Owner')

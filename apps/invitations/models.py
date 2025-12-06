@@ -28,11 +28,14 @@ class Invitation(TimeStampedModel):
     )
 
     # Kim yaratdi? (CenterAdmin)
-    created_by = models.ForeignKey(
-        'authentication.User',
-        on_delete=models.SET_NULL,
+    # ✅ UUIDField instead of ForeignKey (User is in public schema, Invitation is in public schema)
+    # Using UUIDField maintains consistency with tenant schema pattern
+    created_by_id = models.UUIDField(
+        _('creator user id'),
         null=True,
-        related_name='created_invitations'
+        blank=True,
+        db_index=True,
+        help_text=_('UUID of the user who created this invitation')
     )
 
     # Kim uchun? (Teacher yoki Student)

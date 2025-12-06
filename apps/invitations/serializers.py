@@ -3,7 +3,11 @@ from .models import Invitation
 
 
 class InvitationSerializer(serializers.ModelSerializer):
-    """Full invitation serializer for list/detail views"""
+    """
+    Full invitation serializer for list/detail views
+    
+    ✅ Works with created_by_id (UUID) instead of ForeignKey
+    """
     organization_name = serializers.CharField(source='organization.name', read_only=True)
     created_by_name = serializers.SerializerMethodField()
     is_valid = serializers.BooleanField(read_only=True)
@@ -14,15 +18,28 @@ class InvitationSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'code', 'role', 'role_display',
             'organization', 'organization_name',
-            'created_by', 'created_by_name',
+            'created_by_id', 'created_by_name',
             'is_active', 'expires_at', 'usage_limit', 'usage_count',
             'is_valid', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'code', 'usage_count', 'created_at', 'updated_at')
     
     def get_created_by_name(self, obj):
-        if obj.created_by:
-            return obj.created_by.get_full_name() or obj.created_by.email
+        """
+        Fetch creator name from User model (cross-schema lookup)
+        """
+        if obj.created_by_id:
+            from django.contrib.auth import get_user_model
+            from apps.core.tenant_utils import schema_context
+            
+            User = get_user_model()
+            try:
+                # Query User from public schema
+                with schema_context('public'):
+                    user = User.objects.get(id=obj.created_by_id)
+                    return user.get_full_name() or user.email
+            except User.DoesNotExist:
+                return "Unknown (User deleted)"
         return "Unknown"
 
 
@@ -42,9 +59,13 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # Requestdan user va organizationni olamiz
+        """
+        Create invitation with creator UUID
+        
+        ✅ Stores user ID (UUID) instead of ForeignKey reference
+        """
         request = self.context.get('request')
-        validated_data['created_by'] = request.user
+        validated_data['created_by_id'] = request.user.id  # UUID
         validated_data['organization'] = request.user.organization
         return super().create(validated_data)
 
