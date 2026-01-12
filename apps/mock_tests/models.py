@@ -133,9 +133,6 @@ class Choice(TenantBaseModel):
         db_table = 'choices'
         ordering = ['order']
 
-
-
-
 class Quiz(TenantBaseModel):
     """
     Kahoot-style Quiz. 
@@ -159,7 +156,6 @@ class Quiz(TenantBaseModel):
 
     def __str__(self):
         return self.title
-
 
 class QuizQuestion(TenantBaseModel):
     """
@@ -191,7 +187,6 @@ class QuizQuestion(TenantBaseModel):
 
     def __str__(self):
         return f"{self.text[:30]}"
-
 
 class QuizOption(TenantBaseModel):
     """
