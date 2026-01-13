@@ -9,6 +9,7 @@ from drf_spectacular.views import (
 )
 from django.db import connection
 
+#TODO: If I gonna to create tenant-aware schema, I need to set the tenant
 class TenantAwareSpectacularAPIView(SpectacularAPIView):
     def get(self, request, *args, **kwargs):
         from apps.organizations.models import Organization
@@ -23,6 +24,8 @@ class TenantAwareSpectacularAPIView(SpectacularAPIView):
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include("api.v1.urls")),
+
+    path("api/schema/", csrf_exempt(TenantAwareSpectacularAPIView.as_view()), name="schema"),
      # Swagger UI - Interactive API documentation
     path(
         "api/docs/",

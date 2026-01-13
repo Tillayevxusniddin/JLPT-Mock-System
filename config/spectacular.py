@@ -1,3 +1,5 @@
+#TODO: If I gonna need this hook , I use it base.py with SPECTACULAR_SETTINGS
+
 from django.db import connection
 
 def custom_preprocessing_hook(endpoints):

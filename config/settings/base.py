@@ -409,3 +409,14 @@ LOGGING = {
         },
     },
 }
+
+
+
+CHAT_MAX_ATTACHMENT_FILES = env.int("CHAT_MAX_ATTACHMENT_FILES", default=10)
+CHAT_MAX_ATTACHMENT_SIZE_MB = env.int("CHAT_MAX_ATTACHMENT_SIZE_MB", default=10)
+
+#TODO: Spectacular Settings
+SPECTACULAR_SETTINGS = {
+
+}
+

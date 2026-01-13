@@ -1,9 +1,8 @@
-from .base import *
+from .base import * # noqa
 
 DEBUG = True
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
-# Development-only apps (commented out until needed)
-# INSTALLED_APPS += [
-#     'django_extensions',
-# ]
+CORS_ALLOWED_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
