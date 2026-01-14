@@ -7,99 +7,43 @@ from django.core.exceptions import ValidationError
 from apps.core.models import TenantBaseModel 
 
 class Group(TenantBaseModel):
-    """
-    Student Group (Tenant Schema ichida)
-    """
-    
-    # Basic Info
-    name = models.CharField(_('group name'), max_length=255)
-    description = models.TextField(_('description'), blank=True)
-    
-    # JLPT Level
-    level = models.CharField(
-        _('JLPT level'),
-        max_length=2,
-        choices=[
-            ('N5', 'N5 - Beginner'),
-            ('N4', 'N4 - Elementary'),
-            ('N3', 'N3 - Intermediate'),
-            ('N2', 'N2 - Upper Intermediate'),
-            ('N1', 'N1 - Advanced'),
-        ],
-        db_index=True
-    )
-    
-    # Settings
-    max_students = models.PositiveIntegerField(_('max students'), default=30)
-    is_active = models.BooleanField(_('active'), default=True, db_index=True)
-    
-    # Stats (denormalization for performance)
-    student_count = models.PositiveIntegerField(_('student count'), default=0)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    max_students = models.PositiveIntegerField(default=30)
+    is_active = models.BooleanField(default=True, db_index=True)
+    student_count = models.PositiveIntegerField(default=0)
+    teacher_count = models.PositiveIntegerField(default=0)
+    avatar = models.ImageField(upload_to="group_avatars/", null=True, blank=True)
     
     class Meta:
         db_table = 'groups'
-        ordering = ['level', 'name']
-        # Tenant ichida unique bo'lishi kerak
+        ordering = ['name']
         constraints = [
-            models.UniqueConstraint(fields=['name', 'level'], name='unique_group_name_level')
+            models.UniqueConstraint(fields=['name'], name='unique_group_name')
         ]
     
     def __str__(self):
-        return f"{self.name} ({self.level})"
-
-class GroupTeacher(TenantBaseModel):
-    """
-    Teacher assignment to groups.
-    User ID (UUID) saqlanadi, FK emas.
-    """
-    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='teacher_assignments')
-    
-    # MUHIM: ForeignKey o'rniga UUIDField
-    teacher_id = models.UUIDField(_('teacher user id'), db_index=True)
-    
-    is_primary = models.BooleanField(_('primary teacher'), default=False)
-    assigned_at = models.DateTimeField(_('assigned at'), auto_now_add=True)
-    
-    class Meta:
-        db_table = 'group_teachers'
-        unique_together = [['group', 'teacher_id']]
-        
-    def __str__(self):
-        return f"Teacher {self.teacher_id} -> {self.group.name}"
+        return self.name
 
 class GroupMembership(TenantBaseModel):
-    """
-    Student membership in groups.
-    User ID (UUID) saqlanadi, FK emas.
-    """
-    class Status(models.TextChoices):
-        ACTIVE = 'ACTIVE', _('Active')
-        INACTIVE = 'INACTIVE', _('Inactive')
-        GRADUATED = 'GRADUATED', _('Graduated')
-        DROPPED = 'DROPPED', _('Dropped')
-    
     group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='memberships')
-    
-    # MUHIM: ForeignKey o'rniga UUIDField
-    student_id = models.UUIDField(_('student user id'), db_index=True)
-    
-    status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.ACTIVE,
-        db_index=True
-    )
-    
+    user_id = models.BigIntegerField(db_index=True)
     joined_at = models.DateTimeField(auto_now_add=True)
     left_at = models.DateTimeField(null=True, blank=True)
+
+    role_in_group = models.CharField( max_length=20, choices=[("STUDENT", "Student"), ("TEACHER", "Teacher")], )
+    class Meta: 
+        unique_together = ("user_id", "group", "role_in_group") 
+        indexes = [ 
+            models.Index(fields=['user_id', 'group', 'role_in_group']),
+            models.Index(fields=['user_id', 'role_in_group']), 
+            models.Index(fields=['group', 'role_in_group']), 
+        ]
+
+    HARD_DELETE = True
+    objects = models.Manager()
+    def __str__(self): return f"User {self.user_id} in {self.group} as {self.role_in_group}"
+
     
-    # Performance tracking (optional)
-    attendance_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    average_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    
-    class Meta:
-        db_table = 'group_memberships'
-        unique_together = [['group', 'student_id']]
-        
-    def __str__(self):
-        return f"Student {self.student_id} in {self.group.name}"
+
+    #TODO: Add GroupMembership History
