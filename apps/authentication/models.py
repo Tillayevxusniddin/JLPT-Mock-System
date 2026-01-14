@@ -1,163 +1,131 @@
-"""
-Authentication Models
-"""
-import uuid
+from django.contrib.auth.models import AbstractUser
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
+from apps.core.models import PublicBaseModel
+from apps.core.managers import SoftDeleteManager
+from .managers import SoftDeleteUserManager
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from django.core.validators import RegexValidator
 
-from apps.core.models import TimeStampedModel
-from .managers import UserManager
+class User(PublicBaseModel, AbstractUser):
+    
+    id = models.BigAutoField(primary_key=True)
 
+    username = None
+    email = models.EmailField(unique=True) # Agar public schemada user bo'ladigan bo'lsa unique qilsa already exist bo'ladi shuni bir ko'rib chiqish kerak
+    first_name = models.CharField(max_length=150, blank=True)
+    last_name = models.CharField(max_length=150, blank=True)
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
 
-class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
-    """
-    Custom User Model
-    Supports multiple roles: OWNER, CENTERADMIN, TEACHER, STUDENT
-    
-    ✅ Uses UUID as Primary Key for multi-tenant architecture consistency
-    """
-    
-    # Primary Key - UUID for cross-schema compatibility
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text=_('Unique identifier for user across all schemas')
-    )
-    
     class Role(models.TextChoices):
-        OWNER = 'OWNER', _('Platform Owner')
-        CENTERADMIN = 'CENTERADMIN', _('Center Administrator')
-        TEACHER = 'TEACHER', _('Teacher')
-        STUDENT = 'STUDENT', _('Student')
-    
-    # Basic Information
-    email = models.EmailField(_('email address'), unique=True, db_index=True)
-    phone = models.CharField(
-        _('phone number'),
-        max_length=20,
-        blank=True,
-        validators=[RegexValidator(r'^\+?1?\d{9,15}$')]
-    )
-    
-    first_name = models.CharField(_('first name'), max_length=150)
-    last_name = models.CharField(_('last name'), max_length=150)
-    
-    # Profile
-    avatar = models.ImageField(_('avatar'), upload_to='avatars/%Y/%m/', blank=True, null=True)
-    date_of_birth = models.DateField(_('date of birth'), null=True, blank=True)
-    
-    # Role & Organization
-    role = models.CharField(
-        _('role'),
-        max_length=20,
-        choices=Role.choices,
-        db_index=True
-    )
-    organization = models.ForeignKey(
-        'organizations.Organization',
-        on_delete=models.SET_NULL, 
-        null=True,
-        blank=True,
-        related_name='users',
-        help_text=_('Organization the user belongs to (null for OWNER)')
-    )
-    
-    # Status
-    is_active = models.BooleanField(_('active'), default=True)
-    is_approved = models.BooleanField(_('approved'), default=False)
-    is_staff = models.BooleanField(_('staff status'), default=False)
-    is_email_verified = models.BooleanField(_('email verified'), default=False)
-    
-    # Timestamps
-    email_verified_at = models.DateTimeField(_('email verified at'), null=True, blank=True)
-    last_login_at = models.DateTimeField(_('last login at'), null=True, blank=True)
-    
-    # Settings
-    language = models.CharField(_('language'), max_length=10, default='en')
-    timezone = models.CharField(_('timezone'), max_length=50, default='UTC')
-    
-    objects = UserManager()
+        OWNER = "OWNER", "Owner"
+        CENTERADMIN = "CENTERADMIN", "CenterAdmin"
+        TEACHER = "TEACHER", "Teacher"
+        ASSISTANT = "ASSISTANT", "Assistant"
+        STUDENT = "STUDENT", "Student"
+        GUEST = "GUEST", "Guest"
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['first_name', 'last_name', 'role']
-    
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.GUEST)
+    center = models.ForeignKey("centers.Center", on_delete=models.CASCADE, null=True, blank=True)
+    #TODO: group_id kerak emas, groupmemberships orqali qilamiz va my_groups serializer field ishlatamiz
+    is_approved = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    address = models.TextField(null=True, blank=True)
+    bio = models.TextField(null=True, blank=True)
+    city = models.CharField(max_length=100, null=True, blank=True)
+    emergency_contact_phone = models.CharField(max_length=20, null=True, blank=True)
+
+    last_login_ip = models.GenericIPAddressField(null=True, blank=True)
+    last_login_agent = models.CharField(max_length=255, blank=True)
+    last_login_at = models.DateTimeField(null=True, blank=True)
+
+    objects = SoftDeleteUserManager()
+    global_objects = SoftDeleteManager()
+
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = []
+
     class Meta:
         db_table = 'users'
         verbose_name = _('user')
         verbose_name_plural = _('users')
         indexes = [
             models.Index(fields=['email', 'is_active']),
-            models.Index(fields=['organization_id', 'role']),
+            models.Index(fields=['center_id', 'role']),
         ]
-    
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=['email', 'center'],
+                name='unique_email_per_center'
+            )
+        ]
+
     def __str__(self):
-        return f"{self.get_full_name()} ({self.email})"
-    
+        return f"{self.get_full_name()}-{self.role}"
+
     def get_full_name(self):
-        return f"{self.first_name} {self.last_name}".strip()
-    
+        return " ".join(filter(None, [self.first_name, self.last_name]))
+
     def get_short_name(self):
         return self.first_name
-    
+
+    def is_center_member(self):
+        return self.center_id is not None
+
+    def update_last_login_info(self, ip, agent):
+        self.last_login_ip = ip
+        self.last_login_agent = agent
+        self.last_login_at = timezone.now()
+        self.save(update_fields=["last_login_ip", "last_login_agent", "last_login_at"])
+
+    def save(self, *args, **kwargs):
+        #Override save to handle avatar replacement
+        if self.pk:
+            try:
+                old_user = User.objects.get(pk=self.pk)
+                if old_user.avatar and old_user.avatar != self.avatar:
+                    old_user.avatar.delete(save=False)
+            except User.DoesNotExist:
+                pass
+        super().save(*args, **kwargs)
+
+    def soft_delete(self):
+        # Delete avatar from S3 on soft delete
+        if self.avatar:
+            self.avatar.delete(save=False)
+        return super().soft_delete()
+
     @property
-    def is_owner(self):
+    def is_owner_role(self):
         return self.role == self.Role.OWNER
-    
+
     @property
-    def is_center_admin(self):
+    def is_center_admin_role(self):
         return self.role == self.Role.CENTERADMIN
-    
+
     @property
-    def is_teacher(self):
+    def is_teacher_role(self):
         return self.role == self.Role.TEACHER
-    
+
     @property
-    def is_student(self):
+    def is_student_role(self):
         return self.role == self.Role.STUDENT
 
+    @property
+    def is_guest_role(self):
+        return self.role == self.Role.GUEST
 
-class UserProfile(TimeStampedModel):
-    """
-    Common fields for all users
-    """
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    address = models.TextField(_('address'), blank=True)
-    city = models.CharField(_('city'), max_length=100, blank=True)
-    bio = models.TextField(_('biography'), blank=True)
-    emergency_contact_name = models.CharField(_('emergency contact name'), max_length=150, blank=True)
-    emergency_contact_phone = models.CharField(_('emergency contact phone'), max_length=20, blank=True)
+class UserActivity(PublicBaseModel):
 
-    """
-    Student's fields 
-    """
-    enrollment_date = models.DateField(_('enrollment date'), null=True, blank=True)
-    current_level = models.CharField(
-        _('current JLPT level'),
-        max_length=2,
-        choices=[
-            ('N5', 'N5'),
-            ('N4', 'N4'),
-            ('N3', 'N3'),
-            ('N2', 'N2'),
-            ('N1', 'N1'),
-        ],
-        blank=True,
-        null=True
+    user = models.ForeignKey(
+        "authentication.User", 
+        on_delete=models.CASCADE, 
+        related_name="activities"
     )
-
-    """
-    Teacher's fields 
-    """
-    years_of_experience = models.PositiveIntegerField(_('years of experience'), default=0)
-
-    class Meta:
-        db_table = 'user_profiles'
-        verbose_name = _('user profile')
-        verbose_name_plural = _('user profiles')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+    logged_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Profile of {self.user.email}"
-    
+        return f"{self.user.email} - {self.ip_address or 'unknown'}"
