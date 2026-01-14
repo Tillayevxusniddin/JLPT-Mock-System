@@ -28,10 +28,9 @@ class Group(TenantBaseModel):
 class GroupMembership(TenantBaseModel):
     group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='memberships')
     user_id = models.BigIntegerField(db_index=True)
-    joined_at = models.DateTimeField(auto_now_add=True)
-    left_at = models.DateTimeField(null=True, blank=True)
 
     role_in_group = models.CharField( max_length=20, choices=[("STUDENT", "Student"), ("TEACHER", "Teacher")], )
+
     class Meta: 
         unique_together = ("user_id", "group", "role_in_group") 
         indexes = [ 
@@ -42,8 +41,25 @@ class GroupMembership(TenantBaseModel):
 
     HARD_DELETE = True
     objects = models.Manager()
-    def __str__(self): return f"User {self.user_id} in {self.group} as {self.role_in_group}"
+    all_objects = models.Manager()
+
+    def __str__(self): 
+        return f"User {self.user_id} in {self.group} as {self.role_in_group}"
 
     
 
-    #TODO: Add GroupMembership History
+class GroupMembershipHistory(models.Model):
+    user_id = models.BigIntegerField(db_index=True)
+    group = models.ForeignKey("groups.Group", on_delete=models.CASCADE, related_name="membership_history")
+    role_in_group = models.CharField( max_length=20, choices=[("STUDENT", "Student"), ("TEACHER", "Teacher")], )
+    joined_at = models.DateTimeField()
+    left_at = models.DateTimeField(auto_now_add=True)
+
+    left_reason = models.CharField(
+        max_length=20,
+        choices=[
+            ("MOVED", "Moved to another group"),
+            ("REMOVED", "Removed by admin"),
+            ("LEFT", "Left voluntarily"),
+        ],
+    )
