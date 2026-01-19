@@ -26,7 +26,6 @@ class User(PublicBaseModel, AbstractUser):
 
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.GUEST)
     center = models.ForeignKey("centers.Center", on_delete=models.CASCADE, null=True, blank=True)
-    #TODO: group_id kerak emas, groupmemberships orqali qilamiz va my_groups serializer field ishlatamiz
     is_approved = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 

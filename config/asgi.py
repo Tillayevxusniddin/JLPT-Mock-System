@@ -26,7 +26,7 @@ django_asgi_app = get_asgi_application()
 
 try:
     from channels.routing import ProtocolTypeRouter, URLRouter
-    from apps.core.websocket_auth import JWTAuthMiddlewareStack
+    from apps.core.websocket_auth import JWTAuthMiddleware
     from apps.core.asgi_middleware import TenantASGIMiddleware
     from apps.chat.routing import websocket_urlpatterns as chat_patterns
     from apps.notifications.routing import websocket_urlpatterns as notify_patterns
@@ -38,7 +38,7 @@ try:
 
     application = ProtocolTypeRouter({
         "http":django_asgi_app,
-        "websocket":JWTAuthMiddlewareStack(
+        "websocket":JWTAuthMiddleware(
             TenantASGIMiddleware(
                 URLRouter(combined_patterns)
             )

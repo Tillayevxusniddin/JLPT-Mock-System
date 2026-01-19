@@ -111,4 +111,18 @@ def get_public_user_by_id(user_id):
 # ASYNC-SAFE SCHEMA SWITCHING FUNCTIONS FOR DJANGO CHANNELS
 # =============================================================================
 
-#TODO: Add async-safe schema switching functions for django channels
+async def set_tenant_schema_async(schema_name):
+    await sync_to_async(set_tenant_schema)(schema_name)
+
+async def set_public_schema_async():
+    await sync_to_async(set_public_schema)()
+
+async def reset_tenant_schema_async():
+    await sync_to_async(reset_tenant_schema)()
+
+async def schema_exists_async(schema_name):
+    return await sync_to_async(schema_exists)(schema_name)
+
+async def schema_ready_async(schema_name):
+    return await sync_to_async(schema_ready)(schema_name, table_name="groups_group")
+
