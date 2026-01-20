@@ -5,20 +5,25 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from apps.authentication.models import User
 from apps.authentication.serializers import (
-    #serializers
+    RegisterSerializer, LoginSerializer, UserSerializer, 
+    UserListSerializer, UserManagementSerializer,
+    UpdatePasswordSerializer, PasswordResetRequestSerializer, 
+    PasswordResetConfirmSerializer
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.core.permissions import (
     IsCenterAdminOrTeacher
 )
 
-from apps.core.throttling import (
-    #throttling
-)
+#TODO: Throttling va swagger qo'shish kerak
 
-from apps.authentication.swagger import (
+# from apps.core.throttling import (
+#     #throttling
+# )
 
-)
+# from apps.authentication.swagger import (
+
+# )
 
 
 class RegisterView(generics.CreateAPIView):
@@ -35,13 +40,10 @@ class RegisterView(generics.CreateAPIView):
         with transaction.atomic():
             user = serializer.save()
 
-        tokens = RefreshToken.for_user(user)
-
-        #TODO: Agar role student yoki teacher boladigan bolsa registerda token berish kerak emas
         return Response({
-            "access": str(tokens.access_token),
-            "refresh": str(tokens),
-            "user": UserSerializer(user).data,
+            "detail": "Registration successful. Please wait for center administrator approval.",
+            "email": user.email,
+            "role": user.role
         }, status=status.HTTP_201_CREATED)
 
 class LoginView(APIView):
@@ -66,11 +68,9 @@ class MeView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         from apps.core.tenant_utils import with_public_schema
-
         user = self.request.user
 
         if hasattr(user, '_prefetched_objects_cache'):
-            # If already prefetched, return as is
             return user
 
         return with_public_schema(
@@ -80,14 +80,13 @@ class MeView(generics.RetrieveUpdateAPIView):
     def update(self, request, *args, **kwargs):
         from django.db import transaction
         
-        partial = kwargs.pop('partial', True)  # ALWAYS PARTIAL UPDATE
+        partial = kwargs.pop('partial', True)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
         with transaction.atomic():
             serializer.save()
-        
         return Response(serializer.data)
 
     def get(self, request, *args, **kwargs):
@@ -154,16 +153,18 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return User.objects.none()
+        
         user = self.request.user
+        if not user.center_id:
+            return User.objects.none()
 
         from apps.core.tenant_utils import set_public_schema
         set_public_schema()
 
         qs = User.objects.filter(center_id=user.center_id).select_related("center")
-
         if user.role == User.Role.CENTER_ADMIN:
-            # Admin sees everyone in their center
             return qs
+
         elif user.role == User.Role.TEACHER:
             from apps.core.tenant_utils import schema_context
             from apps.groups.models import GroupMembership
