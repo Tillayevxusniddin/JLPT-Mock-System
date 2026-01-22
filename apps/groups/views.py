@@ -19,9 +19,7 @@ from apps.core.permissions import IsCenterAdmin
 from apps.authentication.models import User
 from apps.authentication.serializers import UserListSerializer, UserSerializer
 
-from apps.groups.swagger import (
-   #TODO: schema add 
-)
+# TODO: Add swagger schema decorators
 
 class IsCenterAdminOrGroupTeacher(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -104,6 +102,73 @@ class GroupViewSet(viewsets.ModelViewSet):
                 return Group.objects.none()
         
         return Group.objects.none()
+
+    def list(self, request, *args, **kwargs):
+        """
+        Optimized list endpoint with teacher pre-fetching.
+        
+        PERFORMANCE FIX: Instead of switching schema for every group (N+1 problem),
+        we fetch all teachers ONCE and pass them via serializer context.
+        
+        Before: 20 groups = 20 schema switches
+        After:  20 groups = 1 schema switch
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Paginate first
+        page = self.paginate_queryset(queryset)
+        groups_to_serialize = page if page is not None else queryset
+        
+        # OPTIMIZATION: Pre-fetch all teachers in one go
+        teacher_map = {}
+        if groups_to_serialize:
+            # Step 1: Collect all teacher IDs from ALL groups (in tenant schema)
+            group_ids = [group.id for group in groups_to_serialize]
+            teacher_memberships = GroupMembership.objects.filter(
+                group_id__in=group_ids,
+                role_in_group="TEACHER"
+            ).values('group_id', 'user_id')
+            
+            # Build mapping: {group_id: [teacher_id1, teacher_id2, ...]}
+            group_teacher_ids = {}
+            all_teacher_ids = set()
+            for membership in teacher_memberships:
+                group_id = membership['group_id']
+                user_id = membership['user_id']
+                if group_id not in group_teacher_ids:
+                    group_teacher_ids[group_id] = []
+                group_teacher_ids[group_id].append(user_id)
+                all_teacher_ids.add(user_id)
+            
+            # Step 2: Fetch all teacher User objects from PUBLIC schema (ONCE!)
+            if all_teacher_ids:
+                from apps.core.tenant_utils import with_public_schema
+                from apps.authentication.serializers import SimpleUserSerializer
+                
+                def fetch_all_teachers():
+                    users = User.objects.filter(id__in=all_teacher_ids)
+                    return {user.id: SimpleUserSerializer(user).data for user in users}
+                
+                user_data_map = with_public_schema(fetch_all_teachers)
+                
+                # Step 3: Build final map: {group_id: [serialized_teacher1, serialized_teacher2, ...]}
+                for group_id, teacher_ids in group_teacher_ids.items():
+                    teacher_map[str(group_id)] = [
+                        user_data_map[tid] for tid in teacher_ids if tid in user_data_map
+                    ]
+        
+        # Pass teacher_map to serializer context
+        serializer = self.get_serializer(
+            groups_to_serialize,
+            many=True,
+            context={'request': request, 'teacher_map': teacher_map}
+        )
+        
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        
+        return Response(serializer.data)
+
 
     def perform_create(self, serializer):
         try:

@@ -13,6 +13,9 @@ class GroupListSerializer(serializers.ModelSerializer):
     """
     Serializer for listing groups.
     Includes teacher details fetched from Public Schema.
+    
+    OPTIMIZATION: Uses pre-fetched teacher_map from context when available
+    to eliminate N+1 schema switching.
     """
     teachers = serializers.SerializerMethodField()
     
@@ -27,6 +30,20 @@ class GroupListSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_teachers(self, obj):
+        """
+        Get teacher details for this group.
+        
+        Performance optimization:
+        - If teacher_map exists in context (list view), use it (zero DB hits, zero schema switches)
+        - Otherwise, fall back to fetching from DB (detail view or legacy code)
+        """
+        # OPTIMIZATION: Check if we have pre-fetched teachers in context
+        teacher_map = self.context.get('teacher_map')
+        if teacher_map is not None:
+            # Fast path: Return pre-fetched data (no DB query, no schema switch!)
+            return teacher_map.get(str(obj.id), [])
+        
+        # FALLBACK: Original logic for detail views or when context pre-fetching not used
         try:
             # 1. Get Teacher IDs from Tenant Schema
             teacher_ids = list(
@@ -40,7 +57,6 @@ class GroupListSerializer(serializers.ModelSerializer):
                 return []
 
             # 2. Get User details from Public Schema
-            # Using SimpleUserSerializer to prevent circular dependency and N+1 issues
             from apps.core.tenant_utils import with_public_schema
             
             def get_teacher_users():
@@ -51,6 +67,7 @@ class GroupListSerializer(serializers.ModelSerializer):
             
         except Exception:
             return []
+
 
 
 class GroupSerializer(serializers.ModelSerializer):

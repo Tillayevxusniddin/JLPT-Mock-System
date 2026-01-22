@@ -84,7 +84,15 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 class UserListSerializer(serializers.ModelSerializer):
-    my_groups = serializers.SerializerMethodField()
+    """
+    Lightweight serializer for user list views.
+    
+    NOTE: my_groups field intentionally excluded to prevent N+1 schema switching.
+    Each call to get_user_groups_from_tenant() switches database schema per user,
+    causing severe performance degradation in list views.
+    
+    For group information, use UserSerializer (detail view) instead.
+    """
     center_avatar = serializers.SerializerMethodField()
 
     class Meta:
@@ -92,12 +100,9 @@ class UserListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "email", "first_name", "last_name", "avatar", 
             "role", "center", "center_avatar", 
-            "my_groups", "is_approved", "created_at"
+            "is_approved", "created_at"
         ]
         read_only_fields = ["id", "role", "center", "is_approved"]
-
-    def get_my_groups(self, obj):
-        return get_user_groups_from_tenant(obj)
 
     def get_center_avatar(self, obj):
         if not obj.center_id: return None
@@ -106,6 +111,7 @@ class UserListSerializer(serializers.ModelSerializer):
             from apps.centers.models import Center
             return with_public_schema(lambda: Center.objects.get(id=obj.center_id).avatar.url if Center.objects.get(id=obj.center_id).avatar else None)
         except: return None
+
     
 class UserSerializer(serializers.ModelSerializer):
     my_groups = serializers.SerializerMethodField()

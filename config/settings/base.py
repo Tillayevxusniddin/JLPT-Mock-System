@@ -1,3 +1,4 @@
+#config/settings/base.py
 from pathlib import Path
 from datetime import timedelta
 import environ
@@ -10,7 +11,17 @@ environ.Env.read_env(BASE_DIR / ".env")
 
 SECRET_KEY = env("DJANGO_SECRET_KEY", default='default-secret-key$$')
 DEBUG = env.bool("DJANGO_DEBUG", default=True)
-ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["*"])
+
+# Subdomain-based multi-tenancy support
+# '.jlpt.uz' allows all subdomains: edu1.jlpt.uz, edu2.jlpt.uz, etc.
+ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[
+    '.jlpt.uz',      # Wildcard for all subdomains
+    'jlpt.uz',       # Main domain
+    'localhost',     # Development
+    '127.0.0.1',
+    '[::1]',
+])
+
 
 
 SHARED_APPS = [
@@ -38,7 +49,6 @@ SHARED_APPS = [
     "apps.centers",
     "apps.invitations",
     "apps.notifications",
-    "apps.audit"
 
 ]
 
@@ -115,6 +125,7 @@ DATABASES = {
     }
 }
 
+DATABASE_ROUTERS = ["apps.core.routers.TenantRouter"]
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
@@ -238,8 +249,9 @@ CORS_ALLOW_HEADERS = [
     "user-agent",
     "x-csrftoken",
     "x-requested-with",
-    "x-organization-id",
+    # "x-organization-id",  # DEPRECATED: Removed in favor of subdomain-based routing
 ]
+
 
 # Email Configuration (SMTP) or (SES)
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

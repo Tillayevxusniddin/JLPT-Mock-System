@@ -32,7 +32,12 @@ def update_group_counts(sender, instance: GroupMembership, **kwargs):
 
 @receiver(post_save, sender=GroupMembership)
 def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwargs):
-
+    """
+    Send notification when user is added to a group.
+    
+    CRITICAL: This signal is triggered from a Tenant Schema context (GroupMembership is a tenant model).
+    Notification creation MUST happen in Public Schema, so we wrap it with with_public_schema.
+    """
     if getattr(settings, 'DISABLE_GROUP_SIGNALS', False):
         return
     
@@ -43,7 +48,7 @@ def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwa
         # Cross-schema imports
         from apps.core.tenant_utils import set_public_schema, with_public_schema
         from apps.centers.models import Center
-        from apps.authentication.models import User # Authentication appdan
+        from apps.authentication.models import User
         from apps.notifications.signals import _create_notification
         Notification = apps.get_model("notifications", "Notification")
         
@@ -51,6 +56,7 @@ def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwa
         group_link = f"/groups/{instance.group.id}" if instance.group.id else None
         user_id = instance.user_id
 
+        # Fetch user info from public schema
         user_info = with_public_schema(
             lambda: list(User.objects.filter(id=user_id).values('center_id', 'email'))
         )
@@ -65,6 +71,7 @@ def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwa
         
         center = with_public_schema(lambda: Center.objects.get(id=center_id))
 
+        # Determine message and notification type based on role
         if instance.role_in_group == "STUDENT":
             msg = f"You have been added to group: {group_name}"
             notif_type = Notification.NotificationType.GROUP_ADDED
@@ -74,16 +81,22 @@ def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwa
             notif_type = Notification.NotificationType.ASSIGNED_TO_GROUP
         
         else:
-            return 
+            return
 
-        _create_notification(
-            center=center,
-            user_id=user_id,
-            message=msg,
-            link=group_link,
-            notification_type=notif_type,
-            related_group_id=instance.group_id
-        )
+        # CRITICAL FIX: Create notification in PUBLIC schema
+        # We're currently in TENANT schema context, so we must explicitly switch
+        def create_notification_in_public_schema():
+            _create_notification(
+                center=center,
+                user_id=user_id,
+                message=msg,
+                link=group_link,
+                notification_type=notif_type,
+                related_group_id=instance.group_id
+            )
+        
+        with_public_schema(create_notification_in_public_schema)
+        logger.info(f"✅ Sent group membership notification to user {user_id}")
 
     except Exception as e:
         logger.error(f"Failed to send group membership notification: {str(e)}", exc_info=True)

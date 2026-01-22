@@ -10,9 +10,6 @@ logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender="centers.Center")
 def run_migrations_for_new_center(sender, instance, created, **kwargs):
-    """
-    Create schema and run migrations for newly created center.
-    """
     if not created:
         return
     
@@ -20,7 +17,6 @@ def run_migrations_for_new_center(sender, instance, created, **kwargs):
         logger.warning(f"Center {instance.id} created without schema_name, skipping schema creation")
         return
     
-    # 1. Schema yaratish (Synchronous but safe)
     try:
         instance.create_schema()
         logger.info(f"✅ Created schema: {instance.schema_name}")
@@ -32,31 +28,36 @@ def run_migrations_for_new_center(sender, instance, created, **kwargs):
         )
         return
 
-    # 2. Migratsiya taskini chaqirish (Async)
-    from apps.centers.tasks import run_tenant_migrations
+    # CRITICAL FIX: Defer Celery task until transaction commits
+    # This prevents DoesNotExist errors when worker picks up task before commit
+    def queue_migrations():
+        from apps.centers.tasks import run_tenant_migrations
+        try:
+            task_result = run_tenant_migrations.delay(instance.schema_name)
+            logger.info(
+                f"✅ Queued migrations for new center: {instance.schema_name} "
+                f"(task_id: {task_result.id})",
+                extra={
+                    'center_id': instance.id,
+                    'center_name': instance.name,
+                    'schema_name': instance.schema_name,
+                    'task_id': task_result.id
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to queue migrations for {instance.schema_name}: {str(e)}",
+                exc_info=True,
+                extra={
+                    'center_id': instance.id,
+                    'center_name': instance.name,
+                    'schema_name': instance.schema_name
+                }
+            )
     
-    try:
-        task_result = run_tenant_migrations.delay(instance.schema_name)
-        logger.info(
-            f"✅ Queued migrations for new center: {instance.schema_name} "
-            f"(task_id: {task_result.id})",
-            extra={
-                'center_id': instance.id,
-                'center_name': instance.name,
-                'schema_name': instance.schema_name,
-                'task_id': task_result.id
-            }
-        )
-    except Exception as e:
-        logger.error(
-            f"❌ Failed to queue migrations for {instance.schema_name}: {str(e)}",
-            exc_info=True,
-            extra={
-                'center_id': instance.id,
-                'center_name': instance.name,
-                'schema_name': instance.schema_name
-            }
-        )
+    # Schedule task AFTER transaction commits
+    transaction.on_commit(queue_migrations)
+
 
 
 @receiver(post_save, sender="centers.ContactRequest")

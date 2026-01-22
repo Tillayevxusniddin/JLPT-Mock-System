@@ -1,3 +1,4 @@
+#config/settings/production.py
 from django.conf.global_settings import SECURE_PROXY_SSL_HEADER
 from django.template.defaultfilters import default
 import os

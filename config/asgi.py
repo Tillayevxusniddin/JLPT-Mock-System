@@ -1,3 +1,4 @@
+#config/asgi.py
 """
 ASGI config for 404-edu project with schema-based multi-tenancy support.
 

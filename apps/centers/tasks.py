@@ -202,35 +202,35 @@ def hard_delete_center(self, center_id):
         # ---------------------------------------------------------
         # 1-QADAM: Userlarni o'chirish (Hard Delete)
         # ---------------------------------------------------------
-        # Biz userlarni ORM orqali o'chirishga harakat qilamiz, lekin 
-        # schema o'chirilishi bilan bog'liq xatoliklar bo'lsa, RAW SQL ishlatamiz.
+        # PublicBaseModel.hard_delete() correctly calls super().delete(),
+        # which bypasses soft-delete and executes SQL DELETE.
         users = User.all_objects.filter(center_id=center_id)
         deleted_users_count = 0
         
         for user in users.iterator(chunk_size=100):
             try:
-                # Avatarni o'chirish
+                # Delete avatar from storage first
                 if user.avatar:
-                    try: user.avatar.delete(save=False)
-                    except: pass
+                    try:
+                        user.avatar.delete(save=False)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete avatar for user {user.id}: {e}")
                 
                 user_email = user.email
-                try:
-                    # Userni o'chirish
-                    user.hard_delete() 
-                    deleted_users_count += 1
-                except Exception:
-                    # Agar ORM xato bersa (masalan, tenant tablega bog'liqlik bo'lsa)
-                    # To'g'ridan-to'g'ri SQL bilan o'chiramiz
-                    try:
-                        with connection.cursor() as cursor:
-                            cursor.execute("DELETE FROM authentication_user WHERE id = %s", [str(user.id)])
-                        deleted_users_count += 1
-                    except Exception as e:
-                        logger.error(f"Failed to delete user {user_email}: {e}")
-                        
+                user_id = user.id
+                
+                # Hard delete bypasses soft-delete and executes SQL DELETE
+                user.hard_delete()
+                deleted_users_count += 1
+                logger.debug(f"Hard deleted user {user_email} (ID: {user_id})")
+                
             except Exception as e:
-                logger.error(f"Error processing user {user.id}: {e}")
+                logger.error(f"Failed to hard delete user {user.id}: {e}", exc_info=True)
+                # Continue to next user instead of failing entire task
+                continue
+
+        logger.info(f"✅ Deleted {deleted_users_count} users for center {center_id}")
+
 
         # ---------------------------------------------------------
         # 2-QADAM: Public Schema ma'lumotlarini tozalash

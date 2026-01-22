@@ -1,3 +1,4 @@
+#config/logging_config.py
 """
 Logging configuration for Django with JSON formatting for Loki/Promtail.
 ...

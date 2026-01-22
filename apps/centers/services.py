@@ -60,9 +60,16 @@ def approve_invitation(invitation: Invitation, approver: User) -> User:
 
     
     def trigger_tenant_actions():
+        """
+        Handle post-approval actions that may involve tenant schemas.
+        
+        CRITICAL: Notification creation moved OUTSIDE schema_context to prevent
+        TenantRouter from blocking writes to public schema tables.
+        """
         if not invitation.center or not invitation.center.schema_name:
             return
 
+        # Step 1: Handle tenant-specific logic (inside tenant schema)
         try:
             with schema_context(invitation.center.schema_name):
                 if migrating_guest_to_student:
@@ -71,23 +78,33 @@ def approve_invitation(invitation: Invitation, approver: User) -> User:
                         count = Submission.objects.filter(user_id=target.id).count()
                         logger.info(f"Migrated user {target.id} with {count} submissions in schema {invitation.center.schema_name}.")
                     except LookupError:
-                        pass 
-                try:
-                    from apps.notifications.signals import _create_notification
-                    Notification = apps.get_model("notifications", "Notification")
-                    
-                    msg = f"Your account has been approved! Welcome to {invitation.center.name}."
-                    _create_notification(
-                        center=invitation.center,
-                        user_id=target.id,
-                        message=msg,
-                        notification_type=Notification.NotificationType.INVITATION_APPROVED
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send approval notification: {e}")
-
+                        logger.debug("Submission model not found, skipping migration count")
+                        pass
         except Exception as e:
-            logger.error(f"Error in tenant actions for invitation {invitation.id}: {e}", exc_info=True)
+            logger.error(f"Error in tenant schema actions for invitation {invitation.id}: {e}", exc_info=True)
+        
+        # Step 2: Create notification in PUBLIC schema (OUTSIDE tenant context)
+        # CRITICAL FIX: Notification table is in public schema, must not be inside schema_context
+        try:
+            from apps.notifications.signals import _create_notification
+            from apps.core.tenant_utils import set_public_schema
+            Notification = apps.get_model("notifications", "Notification")
+            
+            # Ensure we're in public schema
+            set_public_schema()
+            
+            msg = f"Your account has been approved! Welcome to {invitation.center.name}."
+            _create_notification(
+                center=invitation.center,
+                user_id=target.id,
+                message=msg,
+                notification_type=Notification.NotificationType.INVITATION_APPROVED
+            )
+            logger.info(f"✅ Sent approval notification to user {target.id}")
+        except Exception as e:
+            logger.error(f"Failed to send approval notification: {e}", exc_info=True)
+
     transaction.on_commit(trigger_tenant_actions)
+
     
     return target

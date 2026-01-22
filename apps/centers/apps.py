@@ -7,5 +7,4 @@ class CentersConfig(AppConfig):
     name = "apps.centers"
     
     def ready(self):
-        # Import signals to register them
         from . import signals  # noqa: F401

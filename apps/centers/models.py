@@ -1,7 +1,8 @@
 #apps/centers/models.py
-from django.db import connection
+from django.db import models, connection
 from django.utils import timezone
 from django.utils.text import slugify
+from django.utils.translation import gettext_lazy as _
 from datetime import timedelta
 from apps.core.models import PublicBaseModel
 from apps.core.utils import generate_code
@@ -10,6 +11,7 @@ from django.core.validators import MinValueValidator
 
 import logging
 logger = logging.getLogger(__name__)
+
 
 class Center(PublicBaseModel):
     """
