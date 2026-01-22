@@ -1,3 +1,4 @@
+#apps/core/authentication.py
 import logging
 from rest_framework_simplejwt.authentication import JWTAuthentication as BaseJWTAuthentication
 from apps.core.tenant_utils import set_tenant_schema, set_public_schema, schema_ready

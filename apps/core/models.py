@@ -1,3 +1,4 @@
+#apps/core/models.py
 from django.db.models.signals import pre_migrate
 import uuid
 from django.db import models

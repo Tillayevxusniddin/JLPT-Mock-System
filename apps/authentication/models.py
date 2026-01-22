@@ -1,3 +1,4 @@
+#apps/authentication/models.py
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from apps.core.models import PublicBaseModel
@@ -11,16 +12,15 @@ class User(PublicBaseModel, AbstractUser):
     id = models.BigAutoField(primary_key=True)
 
     username = None
-    email = models.EmailField(unique=True) # Agar public schemada user bo'ladigan bo'lsa unique qilsa already exist bo'ladi shuni bir ko'rib chiqish kerak
+    email = models.EmailField(unique=False)     
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
 
     class Role(models.TextChoices):
         OWNER = "OWNER", "Owner"
-        CENTERADMIN = "CENTERADMIN", "CenterAdmin"
+        CENTERADMIN = "CENTER_ADMIN", "CenterAdmin"
         TEACHER = "TEACHER", "Teacher"
-        ASSISTANT = "ASSISTANT", "Assistant"
         STUDENT = "STUDENT", "Student"
         GUEST = "GUEST", "Guest"
 

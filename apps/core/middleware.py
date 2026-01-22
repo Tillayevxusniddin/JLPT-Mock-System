@@ -1,6 +1,9 @@
+#apps/core/middleware.py
 import logging
 from django.utils.deprecation import MiddlewareMixin
 from apps.core.tenant_utils import set_public_schema, get_current_schema
+import threading
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,34 @@ class TenantMiddleware(MiddlewareMixin):
 
     
 
-    
+_thread_locals = threading.local()
+
+def get_current_request():
+    return getattr(_thread_locals, 'request', None)
+
+class RequestLogMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        request.id = request.headers.get('X-Request-ID', str(uuid.uuid4()))
+        _thread_locals.request = request
+        try:
+            response = self.get_response(request)
+            response['X-Request-ID'] = request.id
+            return response
+        finally:
+            if hasattr(_thread_locals, 'request'):
+            del _thread_locals.request
+        return response
+
+        
+        
+        
+        
+        
+        
+            
+        
 
         

@@ -1,3 +1,4 @@
+#apps/core/utils.py
 import uuid
 
 def generate_code(length=12):

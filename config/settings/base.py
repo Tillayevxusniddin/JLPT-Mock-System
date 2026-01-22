@@ -8,7 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env = environ.Env()
 environ.Env.read_env(BASE_DIR / ".env")
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default='django-insecure-a0rqa6awp2dl)nsmo&_bhc!-6n#zzpazly$p9+mg)d3f0fs4w+')
+SECRET_KEY = env("DJANGO_SECRET_KEY", default='default-secret-key$$')
 DEBUG = env.bool("DJANGO_DEBUG", default=True)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["*"])
 
@@ -35,7 +35,7 @@ SHARED_APPS = [
     # local shared apps (PUBLIC schema)
     "apps.core",
     "apps.authentication",
-    "apps.organizations",
+    "apps.centers",
     "apps.invitations",
     "apps.notifications",
     "apps.audit"
@@ -52,7 +52,6 @@ TENANT_APPS = [
     "apps.groups",
     "apps.materials",
     "apps.mock_tests",
-    "apps.materials",
     "apps.assignments",
     "apps.attempts",
     "apps.chat",
@@ -62,6 +61,7 @@ TENANT_APPS = [
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
+    'apps.core.middleware.RequestLogMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',  # CORS must be before CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -156,40 +156,6 @@ CELERY_TIMEZONE = TIME_ZONE
 
 #TODO: Add tasks to the schedule
 CELERY_BEAT_SCHEDULE={}
-
-#TODO: Configure Django REST Framework
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'apps.core.authentication.TenantAwareJWTAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
-    'DEFAULT_RENDERER_CLASSES': [
-        'rest_framework.renderers.JSONRenderer',
-    ],
-    'DEFAULT_PARSER_CLASSES': [
-        'rest_framework.parsers.JSONParser',
-        'rest_framework.parsers.MultiPartParser',
-        'rest_framework.parsers.FormParser',
-    ],
-    'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
-    'DATETIME_FORMAT': '%Y-%m-%dT%H:%M:%S.%fZ',
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',  # Anonymous users: 100 requests per hour
-        'user': '1000/hour',  # Authenticated users: 1000 requests per hour
-        'auth': '10/minute',  # Login/register: 10 attempts per minute
-        'password_reset': '5/hour',  # Password reset: 5 attempts per hour
-    },
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',  # API documentation
-}
-
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB
@@ -289,6 +255,7 @@ FRONTEND_URL_BASE = env("FRONTEND_URL_BASE", default="http://localhost:3000")
 
 AUTH_USER_MODEL = 'authentication.User'
 AUTHENTICATION_BACKENDS = [
+    "apps.authentication.backends.TenantAwareBackend",
     "axes.backends.AxesBackend",  # django-axes backend (wraps ModelBackend)
     "django.contrib.auth.backends.ModelBackend",  # default
 ]
@@ -300,14 +267,40 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
-# DRF throttling: 
-REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = [
-    "rest_framework.throttling.ScopedRateThrottle",
-]
-REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
-    "auth": "10/minute",  # Login/register: 10 requests per minute
-    "uploads": "1000/hour",  # Content creation with uploads: 1000 per hour (increased for bulk question/group creation workflow)
-    #"questions": "500/minute",  # Question CRUD operations: 500 per minute (allows creating 40 questions with frequent GET requests for state updates)
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'apps.core.authentication.TenantAwareJWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'apps.core.pagination.DefaultPagination', # O'zingiz yozgan paginationni ulang
+    'PAGE_SIZE': 20,
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.MultiPartParser',
+        'rest_framework.parsers.FormParser',
+    ],
+    'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
+    'DATETIME_FORMAT': '%Y-%m-%dT%H:%M:%S.%fZ',
+    
+    # Throttling
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour', 
+        'user': '1000/hour', 
+        'auth': '10/minute', 
+        'password_reset': '5/hour',
+        'uploads': '1000/hour',
+    },
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 #TODO: need to consider
@@ -346,7 +339,6 @@ SPECTACULAR_SETTINGS = {
 }
 
 
-#TODO: Logging Configuration
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

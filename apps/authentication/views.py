@@ -1,3 +1,4 @@
+#apps/authentication/views.py
 from django.db.models import Prefetch
 from rest_framework import generics, status, permissions, viewsets, filters
 from rest_framework.response import Response
@@ -8,7 +9,7 @@ from apps.authentication.serializers import (
     RegisterSerializer, LoginSerializer, UserSerializer, 
     UserListSerializer, UserManagementSerializer,
     UpdatePasswordSerializer, PasswordResetRequestSerializer, 
-    PasswordResetConfirmSerializer
+    PasswordResetConfirmSerializer, UserCreateSerializer
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.core.permissions import (
@@ -143,9 +144,11 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering_fields = ['created_at', 'last_login', 'first_name', 'last_name', 'email']
     ordering = ['-created_at']
     queryset = User.objects.none()
-    http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options'] 
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'] 
 
     def get_serializer_class(self):
+        if self.action == 'create':
+            return UserCreateSerializer
         if self.action == 'list':
             return UserListSerializer
         return UserManagementSerializer
@@ -168,23 +171,16 @@ class UserViewSet(viewsets.ModelViewSet):
         elif user.role == User.Role.TEACHER:
             from apps.core.tenant_utils import schema_context
             from apps.groups.models import GroupMembership
+            from apps.centers.models import Center
 
             student_user_ids = []
-            if user.center_id:
-                from apps.centers.models import Center
-                from apps.core.tenant_utils import set_public_schema
-
-                set_public_schema()
-                try:
-                    center = Center.objects.get(id=user.center_id)
-                    schema_name = center.schema_name
-                except Center.DoesNotExist:
-                    schema_name = None
-
+            
+            try:
+                center = Center.objects.get(id=user.center_id)
+                schema_name = center.schema_name
+                
                 if schema_name:
                     with schema_context(schema_name):
-                        from apps.groups.models import GroupMembership
-
                         my_teaching_group_ids = list(
                             GroupMembership.objects.filter(
                                 user_id=user.id,
@@ -199,13 +195,21 @@ class UserViewSet(viewsets.ModelViewSet):
                                     role_in_group="STUDENT"
                                 ).values_list('user_id', flat=True).distinct()
                             )
-
-                    return qs.filter(
-                        id__in=student_user_ids if student_user_ids else [],
-                        role=User.Role.STUDENT
-                    ).distinct()
-
+            except Exception:
                 return User.objects.none()
+            return qs.filter(
+                id__in=student_user_ids if student_user_ids else [],
+                role__in=[User.Role.STUDENT, User.Role.GUEST]
+            ).distinct()
+
+        return User.objects.none()
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+
+        if request.user.role == "TEACHER" and self.action not in ['list', 'retrieve']:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Teachers are only allowed to view students.")
 
 class UserAvatarUploadView(generics.UpdateAPIView):
     serializer_class = UserSerializer
@@ -226,8 +230,7 @@ class UserAvatarUploadView(generics.UpdateAPIView):
         if user.avatar:
             try:
                 user.avatar.delete(save=False)
-            except Exception:
-                # Continue even if deletion fails (old file might not exist)
+            except Exception as e:
                 logger.error(f"Failed to delete avatar for user {user.id}: {str(e)}")
                 pass
 

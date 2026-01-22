@@ -1,3 +1,4 @@
+#apps/authentication/managers.py
 from django.contrib.auth.models import BaseUserManager
 from apps.core.managers import SoftDeleteManager
 

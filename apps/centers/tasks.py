@@ -1,3 +1,4 @@
+#apps/centers/tasks.py
 from celery import shared_task
 from django.core.management import call_command
 from apps.core.tenant_utils import set_tenant_schema, reset_tenant_schema

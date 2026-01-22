@@ -1,3 +1,4 @@
+#apps/core/tenant_utils.py
 import re
 import contextvars
 from django.db import connection

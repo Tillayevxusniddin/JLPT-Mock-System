@@ -200,7 +200,155 @@ from config.logging_config import JSONFormatter, RequestIDFilter
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-LOGGING = {  } #TODO: Configure logging for production
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {
+            "()": JSONFormatter,
+        },
+        "verbose": {
+            "format": "[{levelname}] {asctime} {name} {module} {funcName} - Schema: {schema_name} - {message}",
+            "style": "{",
+            "defaults": {"schema_name": "public"},  # Default if not set
+        },
+        "simple": {
+            "format": "[{levelname}] {message}",
+            "style": "{",
+        },
+    },
+    "filters": {
+        "require_debug_false": {
+            "()": "django.utils.log.RequireDebugFalse",
+        },
+        "request_id": {
+            "()": RequestIDFilter,
+        },
+    },
+    "handlers": {
+        "console": {
+            "level": "INFO",
+            "class": "logging.StreamHandler",
+            "formatter": "json",  # Use JSON for Loki
+            "filters": ["request_id"],
+        },
+        "file": {
+            "level": "WARNING",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": os.path.join(LOGS_DIR, "production.log"),
+            "maxBytes": 1024 * 1024 * 10,  # 10 MB
+            "backupCount": 5,
+            "formatter": "json",  # Use JSON for Loki
+            "filters": ["request_id"],
+        },
+        "error_file": {
+            "level": "ERROR",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": os.path.join(LOGS_DIR, "errors.log"),
+            "maxBytes": 1024 * 1024 * 10,  # 10 MB
+            "backupCount": 10,  # Keep more error logs
+            "formatter": "json",
+            "filters": ["request_id"],
+        },
+        # "backup_file": {
+        #     "level": "INFO",
+        #     "class": "logging.handlers.RotatingFileHandler",
+        #     "filename": os.path.join(LOGS_DIR, "backup.log"),
+        #     "maxBytes": 1024 * 1024 * 10,  # 10 MB
+        #     "backupCount": 5,
+        #     "formatter": "verbose",  # Use verbose format for backup logs (more readable)
+        #     "delay": False,  # Don't delay file creation
+        # },
+        "mail_admins": {
+            "level": "ERROR",
+            "class": "django.utils.log.AdminEmailHandler",
+            "filters": ["require_debug_false"],
+        },
+    },
+    "root": {
+        "handlers": ["console", "file", "error_file"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console", "error_file", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.security": {
+            "handlers": ["console", "error_file", "mail_admins"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "apps": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Application-specific loggers
+        "apps.authentication": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.attempts": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.assignments": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.chat": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.notifications": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        #TODO: Add loggers for other apps -> later
+
+        #TODO: Add loggers for backup operations -> later
+        # Backup operations logger
+        # "backup": {
+        #     "handlers": ["console", "backup_file", "error_file"],
+        #     "level": "INFO",
+        #     "propagate": False,
+        # },
+        # Backup management command loggers (catch both logger names)
+        # "apps.core.management.commands.backup_db": {
+        #     "handlers": ["console", "backup_file", "error_file"],
+        #     "level": "INFO",
+        #     "propagate": False,
+        # },
+        # "apps.core.management.commands.restore_db": {
+        #     "handlers": ["console", "backup_file", "error_file"],
+        #     "level": "INFO",
+        #     "propagate": False,
+        # },
+        # "apps.core.management.commands.cleanup_orphaned_schemas": {
+        #     "handlers": ["console", "backup_file", "error_file"],
+        #     "level": "INFO",
+        #     "propagate": False,
+        # },
+        # Also catch any logger with "backup" in the name
+        # "backup_db": {
+        #     "handlers": ["console", "backup_file", "error_file"],
+        #     "level": "INFO",
+        #     "propagate": False,
+        # },
+    },
+}
 
 
 # ========================================
@@ -216,10 +364,9 @@ EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@nintei-shiken.uz")
 
-# Admin email for error notifications
-# ADMINS should be a list of tuples: [("Name", "email@example.com")]
-ADMINS = [("Japanese Shiken", "tillayevx1@gmail.com")]
-
+ADMIN_NAME = env("ADMIN_NAME", default="Japanese Shiken Admin")
+ADMIN_EMAIL = env("ADMIN_EMAIL", default="admin@example.com")
+ADMINS = [(ADMIN_NAME, ADMIN_EMAIL)]
 # ========================================
 # Caching
 # ========================================

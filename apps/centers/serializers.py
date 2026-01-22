@@ -1,3 +1,5 @@
+
+#apps/centers/serializers.py
 from rest_framework import serializers
 from django.db.models import Q
 from django.utils import timezone
@@ -84,6 +86,7 @@ class OwnerCenterListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
     
+    #TODO: Optimization required -> N+1
     def get_centeradmin_emails(self, obj) -> list:
         """Get all CENTER_ADMIN users for this center."""
         admins = User.objects.filter(
@@ -177,7 +180,6 @@ class InvitationDetailSerializer(serializers.ModelSerializer):
                   "invited_by", "target_user", "expires_at", "created_at"]
 
 class InvitationApproveSerializer(serializers.Serializer):
-    """Serializer for approving invitations."""
     code = serializers.CharField()
 
     def validate(self, data):
@@ -216,8 +218,14 @@ class CenterAdminCreateSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, min_length=6)
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("This email already exists.")
+        center = self.context.get("center")
+        
+        if User.objects.filter(email=value, center=center).exists():
+            raise serializers.ValidationError("User with this email already exists in this center.")
+
+        if User.objects.filter(email=value, role="OWNER").exists():
+            raise serializers.ValidationError("This email is reserved for platform administrators.")
+            
         return value
 
     def create(self, validated_data):
@@ -235,7 +243,6 @@ class CenterAdminCreateSerializer(serializers.Serializer):
         return user
 
 class CenterAdminListSerializer(serializers.ModelSerializer):
-    """Lightweight serializer for listing CenterAdmins."""
     center_name = serializers.SerializerMethodField()
     
     class Meta:
@@ -250,7 +257,6 @@ class CenterAdminListSerializer(serializers.ModelSerializer):
             return None
 
 class CenterAdminDetailSerializer(serializers.ModelSerializer):
-    """Detailed serializer for CenterAdmin retrieve/update."""
     center_name = serializers.SerializerMethodField()
     
     class Meta:

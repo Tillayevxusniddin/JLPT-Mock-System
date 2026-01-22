@@ -1,3 +1,4 @@
+#apps/authentication/signals.py
 from django.contrib.auth.signals import user_logged_in
 from django.db import transaction
 from django.dispatch import receiver

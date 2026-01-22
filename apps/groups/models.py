@@ -1,6 +1,4 @@
-"""
-Groups Models - Tenant Schema
-"""
+#apps/groups/models.py
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
@@ -63,3 +61,9 @@ class GroupMembershipHistory(models.Model):
             ("LEFT", "Left voluntarily"),
         ],
     )
+    class Meta:
+        indexes = [
+            models.Index(fields=['user_id', 'left_at']),
+            models.Index(fields=['group', 'left_at']),
+        ]
+    

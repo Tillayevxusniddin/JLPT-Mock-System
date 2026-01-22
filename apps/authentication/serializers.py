@@ -1,3 +1,4 @@
+#apps/authentication/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -57,7 +58,31 @@ def get_user_groups_from_tenant(user):
         logger.error(f"Error fetching groups for user {user.id}: {e}")
         return []
 
-            
+
+class UserCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=6)
+    role = serializers.ChoiceField(choices=[('TEACHER', 'Teacher'), ('STUDENT', 'Student')])
+
+    class Meta:
+        model = User
+        fields = [
+            "id", "email", "first_name", "last_name", "avatar", 
+            "role", "password", "is_active"
+        ]
+
+    def create(self, validated_data):
+        from django.db import transaction
+        request = self.context.get("request")
+        validated_data["center_id"] = request.user.center_id
+        validated_data["is_approved"] = True
+        password = validated_data.pop("password")
+
+        with transaction.atomic():
+            user = User.objects.create_user(**validated_data)
+            user.set_password(password)
+            user.save()
+        return user
+
 class UserListSerializer(serializers.ModelSerializer):
     my_groups = serializers.SerializerMethodField()
     center_avatar = serializers.SerializerMethodField()
@@ -106,8 +131,13 @@ class UserSerializer(serializers.ModelSerializer):
             return with_public_schema(lambda: list(Center.objects.filter(id=obj.center_id).values('id', 'name', 'is_active'))[0])
         except: return None
 
+class SimpleUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "first_name", "last_name", "avatar", "email"]
+        read_only_fields = ["id"]
+
 class UserManagementSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=False, min_length=6)
     my_groups = serializers.SerializerMethodField()
 
     class Meta:
@@ -115,9 +145,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
         fields = [
             "id", "email", "first_name", "last_name", "avatar", 
             "role", "is_active", "is_approved",
-            "my_groups", "password", "created_at"
+            "my_groups", "created_at"
         ]
-        read_only_fields = ["id", "role", "created_at"]
+        read_only_fields = ["id", "role", "created_at", "email"]
 
     def get_my_groups(self, obj):
         return get_user_groups_from_tenant(obj)
@@ -204,8 +234,16 @@ class LoginSerializer(serializers.Serializer):
         )
         if not user:
             raise serializers.ValidationError({"detail": "Invalid credentials."})
+        if not user.is_active:
+            raise serializers.ValidationError({"detail": "User account is disabled."})
         if not user.is_approved:
             raise serializers.ValidationError({"detail": "Account pending approval."})
+        if user.center and user.role != "OWNER":
+            if not user.center.is_active: 
+                raise serializers.ValidationError({
+                    "detail": "This center is currently suspended. Please contact support."
+                })
+
         tokens = RefreshToken.for_user(user)
         return {"access": str(tokens.access_token), "refresh": str(tokens), "user": user}
 

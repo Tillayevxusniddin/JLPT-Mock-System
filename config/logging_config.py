@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import datetime
 from django.conf import settings
+from apps.core.middleware import get_current_request
 
 class JSONFormatter(logging.Formatter):
     def format(self, record):
@@ -45,8 +46,7 @@ class JSONFormatter(logging.Formatter):
 class RequestIDFilter(logging.Filter):
     def filter(self, record):
         try:
-            import threading
-            request = getattr(threading.current_thread(), 'request', None)
+            request = get_current_request()
 
             if request:
                 record.request_id = getattr(request, 'id', None)

@@ -1,3 +1,4 @@
+#apps/core/pagination.py
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.exceptions import ValidationError
 from django.core.paginator import InvalidPage, EmptyPage

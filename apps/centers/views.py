@@ -1,3 +1,4 @@
+#apps/centers/views.py
 from rest_framework import generics, permissions, status, filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -84,7 +85,6 @@ class InvitationCreateView(generics.CreateAPIView):
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-
 class InvitationFilter(FilterSet):
     is_used = filters_module.BooleanFilter(method='filter_is_used')
     
@@ -97,11 +97,9 @@ class InvitationFilter(FilterSet):
         model = Invitation
         fields = ['role', 'status']
 
-
-
 class InvitationListView(generics.ListAPIView):
     serializer_class = InvitationDetailSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = InvitationFilter
     search_fields = ['code']
@@ -115,16 +113,7 @@ class InvitationListView(generics.ListAPIView):
             return Invitation.objects.none()
         
         user = self.request.user
-        queryset = Invitation.objects.filter(center_id=user.center_id).order_by("-created_at")
-        
-        if user.role == "CENTER_ADMIN":
-            return queryset
-        elif user.role == "TEACHER":
-            return queryset.filter(invited_by=user)
-        else:
-            return queryset.none()
-
-
+        return Invitation.objects.filter(center_id=user.center_id).order_by("-created_at")
 
 class InvitationApproveView(generics.GenericAPIView):
     serializer_class = InvitationApproveSerializer
@@ -136,7 +125,7 @@ class InvitationApproveView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         user_name = f"{user.first_name} {user.last_name}"
-        return Response({"detail": f"{user_name} approve qilindi."}, status=status.HTTP_200_OK)
+        return Response({"detail": f"{user_name} approved by Center Admin."}, status=status.HTTP_200_OK)
 
 
 # --- OWNER VIEWS (CENTER MANAGEMENT) ---
@@ -149,8 +138,6 @@ class CenterCreateView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         set_public_schema()
         return super().create(request, *args, **kwargs)
-
-
 
 class CenterAdminCreateView(generics.GenericAPIView):
     serializer_class = CenterAdminCreateSerializer
@@ -167,7 +154,6 @@ class CenterAdminCreateView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response({"detail": "CenterAdmin yaratildi.", "user_id": str(user.id)}, status=status.HTTP_201_CREATED)
-
 
 class OwnerCenterViewSet(viewsets.ModelViewSet):
     """
@@ -385,8 +371,6 @@ class ContactRequestCreateView(generics.CreateAPIView):
     serializer_class = ContactRequestCreateSerializer
     permission_classes = [permissions.AllowAny]
 
-
-
 class OwnerContactRequestViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -408,23 +392,18 @@ class OwnerContactRequestViewSet(viewsets.ModelViewSet):
             return ContactRequest.objects.none()
         return ContactRequest.objects.filter(deleted_at__isnull=True).order_by('-created_at')
     
-    @owner_contact_request_list_schema
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
     
-    @owner_contact_request_retrieve_schema
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
     
-    @owner_contact_request_update_schema
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)
     
-    @owner_contact_request_partial_update_schema
     def partial_update(self, request, *args, **kwargs):
         return super().partial_update(request, *args, **kwargs)
     
-    @owner_contact_request_destroy_schema
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
