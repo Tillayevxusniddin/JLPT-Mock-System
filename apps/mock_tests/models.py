@@ -1,3 +1,4 @@
+# apps/mock_tests/models.py
 """
 Mock Tests Models - JLPT Mock Test System
 Structure: MockTest -> TestSection -> QuestionGroup (Mondai) -> Question -> Choice
@@ -23,7 +24,7 @@ class MockTest(TenantBaseModel):
     level = models.CharField(max_length=2, choices=Level.choices, db_index=True)
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
-    created_by_id = models.UUIDField(null=True, blank=True)
+    created_by_id = models.BigIntegerField(null=True, blank=True)
     pass_score = models.PositiveIntegerField(default=90)
     total_score = models.PositiveIntegerField(default=180)
 
@@ -126,7 +127,6 @@ class Question(TenantBaseModel):
 
     def __str__(self):
         return f"Q{self.question_number}: {self.text[:30]}"
-
 
 class Quiz(TenantBaseModel):
     title = models.CharField(max_length=255)

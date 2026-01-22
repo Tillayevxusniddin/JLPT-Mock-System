@@ -14,10 +14,10 @@ class MockAttempt(TenantBaseModel):
     Jiddiy imtihon urinishi (JLPT standarti).
     """
     class Status(models.TextChoices):
-        IN_PROGRESS = 'IN_PROGRESS', _('In Progress')
-        SUBMITTED = 'SUBMITTED', _('Submitted (Waiting for grading)')
-        GRADED = 'GRADED', _('Graded (Published)')
-        EXPIRED = 'EXPIRED', _('Expired (Time out)')
+        IN_PROGRESS = 'IN_PROGRESS', ('In Progress')
+        SUBMITTED = 'SUBMITTED', ('Submitted (Waiting for grading)')
+        GRADED = 'GRADED', ('Graded (Published)')
+        EXPIRED = 'EXPIRED', ('Expired (Time out)')
 
     # --- RELATIONS ---
     assignment = models.ForeignKey(
