@@ -87,14 +87,22 @@ class ExamAssignment(TenantBaseModel):
 class HomeworkAssignment(TenantBaseModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    deadline = models.DateTimeField()
+    deadline = models.DateTimeField(
+        help_text="Deadline must be in the future"
+    )
 
-    mock_test = models.ForeignKey(
-        "mock_tests.MockTest", 
-        on_delete=models.SET_NULL,
-        null=True, 
+    # Multiple MockTests and Quizzes support
+    mock_tests = models.ManyToManyField(
+        "mock_tests.MockTest",
+        blank=True,
         related_name="homework_assignments",
-        help_text="mock_test should be required field in the serializer"
+        help_text="Multiple MockTests can be assigned to this homework"
+    )
+    quizzes = models.ManyToManyField(
+        "mock_tests.Quiz",
+        blank=True,
+        related_name="homework_assignments",
+        help_text="Multiple Quizzes can be assigned to this homework"
     )
     
     created_by_id = models.BigIntegerField(
@@ -124,16 +132,44 @@ class HomeworkAssignment(TenantBaseModel):
         return f"[Homework] {self.title} (Due: {self.deadline.date()})"
 
     def clean(self):
+        from django.utils import timezone
+        
         if not self.title:
             raise ValidationError("Title is required.")
-            
-        # LOGIC FIX: Only PUBLISHED tests
-        if self.mock_test:
-            if self.mock_test.status != "PUBLISHED":
-                raise ValidationError("Only PUBLISHED mock tests can be assigned.")
-            
-            if self.mock_test.deleted_at is not None:
-                raise ValidationError("Deleted mock_test cannot be assigned.")
+        
+        # Validate deadline is in the future
+        if self.deadline and self.deadline <= timezone.now():
+            raise ValidationError("Deadline must be in the future.")
+        
+        # Validate at least one resource (MockTest or Quiz) is assigned
+        # This will be checked in the serializer since M2M fields are set after save
+        # But we can check if both are empty in the serializer
+        
+        # Validate all MockTests are PUBLISHED
+        for mock_test in self.mock_tests.all():
+            if mock_test.status != "PUBLISHED":
+                raise ValidationError(
+                    f"Only PUBLISHED mock tests can be assigned. "
+                    f"MockTest '{mock_test.title}' has status: {mock_test.status}"
+                )
+            if mock_test.deleted_at is not None:
+                raise ValidationError(
+                    f"Deleted mock tests cannot be assigned. "
+                    f"MockTest '{mock_test.title}' is deleted."
+                )
+        
+        # Validate all Quizzes are active
+        for quiz in self.quizzes.all():
+            if not quiz.is_active:
+                raise ValidationError(
+                    f"Only active quizzes can be assigned. "
+                    f"Quiz '{quiz.title}' is not active."
+                )
+            if quiz.deleted_at is not None:
+                raise ValidationError(
+                    f"Deleted quizzes cannot be assigned. "
+                    f"Quiz '{quiz.title}' is deleted."
+                )
 
     @property
     def created_by(self):
