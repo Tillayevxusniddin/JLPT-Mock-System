@@ -15,9 +15,10 @@ class TenantAwareBackend(ModelBackend):
     to determine which center context the user is logging into.
     
     Examples:
-        edu1.jlpt.uz → Center(slug='edu1')
-        edu2.jlpt.uz → Center(slug='edu2')
-        jlpt.uz      → No center (Owner/public login)
+        edu1.mikan.uz → Center(slug='edu1')
+        edu2.mikan.uz → Center(slug='edu2')
+        mikan.uz      → No center (Owner/public login)
+        api.mikan.uz  → No center (API / owner login)
     """
     
     def authenticate(self, request, username=None, password=None, **kwargs):
@@ -70,7 +71,14 @@ class TenantAwareBackend(ModelBackend):
             host = request.get_host().split(':')[0]
             
             # Main domains (no tenant context)
-            if host in ['localhost', '127.0.0.1', 'jlpt.uz', 'www.jlpt.uz']:
+            MAIN_HOSTS = {
+                "localhost",
+                "127.0.0.1",
+                "mikan.uz",
+                "www.mikan.uz",
+                "api.mikan.uz",  # API host (no center context)
+            }
+            if host in MAIN_HOSTS:
                 logger.debug(f"Main domain detected: {host}, no center context")
                 return None
             

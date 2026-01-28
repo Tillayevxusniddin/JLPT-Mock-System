@@ -76,7 +76,7 @@ CORS_ALLOW_METHODS = [
 # Get CORS_ALLOWED_ORIGINS from environment, but ensure localhost is included for development
 _cors_origins_from_env = env.list("CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOWED_ORIGINS = _cors_origins_from_env if _cors_origins_from_env else [
-   #TODO: Add production origins
+    # Default development/frontend origins
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -140,9 +140,10 @@ CSRF_COOKIE_SECURE = True  # Only send over HTTPS
 # CSRF Trusted Origins (for frontend on Netlify and local development)
 _csrf_origins_from_env = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 CSRF_TRUSTED_ORIGINS = _csrf_origins_from_env if _csrf_origins_from_env else [
-    "https://404online.uz",
-    "https://www.404online.uz",
-    "https://api.404online.uz",
+    # Default trusted origins; override in production .env for mikan.uz
+    "https://mikan.uz",
+    "https://www.mikan.uz",
+    "https://api.mikan.uz",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -153,12 +154,15 @@ CSRF_TRUSTED_ORIGINS = _csrf_origins_from_env if _csrf_origins_from_env else [
 # ========================================
 
 ALLOWED_HOSTS = env.list(
-    "ALLOWED_HOSTS", 
+    "ALLOWED_HOSTS",
     default=[
-        #TODO: Add production hosts
-        "127.0.0.1",  # For internal Nginx proxy requests
-        "localhost",  # For internal requests
-    ]
+        # Override via env in production; these are safe fallbacks
+        "api.mikan.uz",
+        "mikan.uz",
+        ".mikan.uz",
+        "127.0.0.1",
+        "localhost",
+    ],
 )
 
 if not ALLOWED_HOSTS:
@@ -381,7 +385,7 @@ CACHES = {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             "PASSWORD": env("REDIS_PASSWORD", default=None),
         },
-        "KEY_PREFIX": "404edu", #TODO: Change key prefix
+        "KEY_PREFIX": "mikan",  # Cache key prefix per project
         "TIMEOUT": 300,
     }
 }

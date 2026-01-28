@@ -57,12 +57,11 @@ class RequestLogMiddleware:
         _thread_locals.request = request
         try:
             response = self.get_response(request)
-            response['X-Request-ID'] = request.id
+            response["X-Request-ID"] = request.id
             return response
         finally:
-            if hasattr(_thread_locals, 'request'):
-            del _thread_locals.request
-        return response
+            if hasattr(_thread_locals, "request"):
+                del _thread_locals.request
 
         
         

@@ -13,14 +13,17 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", default='default-secret-key$$')
 DEBUG = env.bool("DJANGO_DEBUG", default=True)
 
 # Subdomain-based multi-tenancy support
-# '.jlpt.uz' allows all subdomains: edu1.jlpt.uz, edu2.jlpt.uz, etc.
-ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[
-    '.jlpt.uz',      # Wildcard for all subdomains
-    'jlpt.uz',       # Main domain
-    'localhost',     # Development
-    '127.0.0.1',
-    '[::1]',
-])
+# Example: '.mikan.uz' allows all subdomains: edu1.mikan.uz, edu2.mikan.uz, etc.
+ALLOWED_HOSTS = env.list(
+    "DJANGO_ALLOWED_HOSTS",
+    default=[
+        ".mikan.uz",   # Wildcard for all subdomains
+        "mikan.uz",    # Main domain
+        "localhost",   # Development
+        "127.0.0.1",
+        "[::1]",
+    ],
+)
 
 
 
@@ -341,17 +344,6 @@ AXES_VERBOSE = DEBUG
 AXES_LOCK_OUT_AT_FAILURE = True
 
 
-# DRF Spectacular (API Documentation)
-SPECTACULAR_SETTINGS = {
-    'TITLE': 'JLPT Mock System API',
-    'DESCRIPTION': 'Multi-tenant JLPT Mock Test Management System',
-    'VERSION': '1.0.0',
-    'SERVE_INCLUDE_SCHEMA': False,
-    'COMPONENT_SPLIT_REQUEST': True,
-    'SCHEMA_PATH_PREFIX': '/api/',
-}
-
-
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -419,9 +411,3 @@ LOGGING = {
 
 CHAT_MAX_ATTACHMENT_FILES = env.int("CHAT_MAX_ATTACHMENT_FILES", default=10)
 CHAT_MAX_ATTACHMENT_SIZE_MB = env.int("CHAT_MAX_ATTACHMENT_SIZE_MB", default=10)
-
-#TODO: Spectacular Settings
-SPECTACULAR_SETTINGS = {
-
-}
-
