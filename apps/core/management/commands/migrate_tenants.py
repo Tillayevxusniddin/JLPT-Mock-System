@@ -165,18 +165,21 @@ class Command(BaseCommand):
     def _run_migration(self, app_label, fake=False, verbosity=1):
         try:
             call_command(
-                'migrate',
+                "migrate",
                 app_label,
-                database='default',
+                database="default",
                 verbosity=verbosity,
                 fake=fake,
-                interactive=False
+                interactive=False,
             )
         except Exception as e:
-            # Skip "No migrations" errors gracefully
-            if 'does not have migrations' in str(e) or 'No migrations' in str(e):
+            msg = str(e).lower()
+            if "does not have migrations" in msg or "no migrations" in msg:
                 return
-            self.stdout.write(self.style.WARNING(f"   ⚠ Warning in {app_label}: {e}"))
+            self.stdout.write(
+                self.style.ERROR(f"Migration failed for {app_label}: {e}")
+            )
+            raise
 
     def _get_app_labels(self, app_list):
         """Extracts label from apps.xxx and checks if it's valid"""

@@ -1,25 +1,32 @@
-#apps/groups/views.py
-from django.apps import apps
+# apps/groups/views.py
+"""
+Groups app API views. OpenAPI schemas live in apps.groups.swagger.
+
+Cross-schema: Groups/memberships are in tenant schema; users in public schema.
+List view pre-fetches all teachers in one public-schema query (teacher_map).
+"""
 from django.db import IntegrityError
-from django.db.models import Count, Q
-from rest_framework import viewsets, mixins, permissions, status, filters
+from django.db.models import Q
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import mixins, permissions, status, filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
-from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.authentication.models import User
+from apps.authentication.serializers import UserListSerializer
+from apps.core.permissions import IsCenterAdmin
 from apps.groups.models import Group, GroupMembership
 from apps.groups.serializers import (
-    GroupSerializer,
+    BulkGroupMembershipSerializer,
     GroupListSerializer,
     GroupMembershipSerializer,
-    BulkGroupMembershipSerializer,
+    GroupSerializer,
 )
-from apps.core.permissions import IsCenterAdmin
-from apps.authentication.models import User
-from apps.authentication.serializers import UserListSerializer, UserSerializer
-
-# TODO: Add swagger schema decorators
+from apps.groups.swagger import (
+    group_membership_viewset_schema,
+    group_viewset_schema,
+)
 
 class IsCenterAdminOrGroupTeacher(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -35,6 +42,7 @@ class IsCenterAdminOrGroupTeacher(permissions.BasePermission):
 
 
 
+@group_viewset_schema
 class GroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -157,11 +165,12 @@ class GroupViewSet(viewsets.ModelViewSet):
                         user_data_map[tid] for tid in teacher_ids if tid in user_data_map
                     ]
         
-        # Pass teacher_map to serializer context
+        context = self.get_serializer_context()
+        context["teacher_map"] = teacher_map
         serializer = self.get_serializer(
             groups_to_serialize,
             many=True,
-            context={'request': request, 'teacher_map': teacher_map}
+            context=context,
         )
         
         if page is not None:
@@ -220,10 +229,13 @@ class GroupViewSet(viewsets.ModelViewSet):
         serializer = UserListSerializer(users_list, many=True, context={'request': request})
         return Response(serializer.data)
 
-class GroupMembershipViewSet(mixins.CreateModelMixin,
-                             mixins.DestroyModelMixin,
-                             mixins.ListModelMixin,
-                             viewsets.GenericViewSet):
+@group_membership_viewset_schema
+class GroupMembershipViewSet(
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
     serializer_class = GroupMembershipSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
@@ -289,12 +301,14 @@ class GroupMembershipViewSet(mixins.CreateModelMixin,
 
         if instance.role_in_group == "STUDENT":
             from apps.groups.utils import remove_student_from_group
-            remove_student_from_group(instance.user_id, request.user, reason="REMOVED")
+            remove_student_from_group(
+                instance.user_id, request.user, reason="REMOVED", group_id=instance.group_id
+            )
             return Response({"message": "Student removed."}, status=status.HTTP_200_OK)
         
         if instance.role_in_group == "TEACHER":
             instance.delete()
-            return Response({"message": "Teacher removed form group."}, status=status.HTTP_200_OK)
+            return Response({"message": "Teacher removed from group."}, status=status.HTTP_200_OK)
 
         return Response({"detail": "Invalid role."}, status=status.HTTP_400_BAD_REQUEST)
 

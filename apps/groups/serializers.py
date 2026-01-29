@@ -1,12 +1,11 @@
 # apps/groups/serializers.py
 
-from rest_framework import serializers
-from drf_spectacular.utils import extend_schema_field
 from django.db import transaction
+from rest_framework import serializers
 
-from apps.groups.models import Group, GroupMembership
 from apps.authentication.models import User
 from apps.authentication.serializers import SimpleUserSerializer
+from apps.groups.models import Group, GroupMembership
 
 
 class GroupListSerializer(serializers.ModelSerializer):
@@ -28,7 +27,6 @@ class GroupListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "student_count", "teacher_count", "created_at", "updated_at"]
 
-    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_teachers(self, obj):
         """
         Get teacher details for this group.
@@ -191,8 +189,13 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
              raise serializers.ValidationError("User role must be TEACHER to be added as a teacher.")
              
         if role_in_group == "STUDENT" and target_user.role not in ["STUDENT", "GUEST"]:
-             raise serializers.ValidationError("User role must be STUDENT or GUEST.")
+            raise serializers.ValidationError("User role must be STUDENT or GUEST.")
 
+        group = Group.objects.get(id=attrs["group_id"])
+        if role_in_group == "STUDENT" and group.student_count >= group.max_students:
+            raise serializers.ValidationError(
+                {"group": f"Group is full (max {group.max_students} students)."}
+            )
         return attrs
 
     def create(self, validated_data):
@@ -207,18 +210,36 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
 
 class BulkGroupMembershipSerializer(serializers.Serializer):
     """
-    Serializer for bulk adding members to a group.
-    Ensures data integrity with transaction.atomic.
+    Bulk add members to a group. Fully atomic; enforces max_students and dedupes.
     """
     group_id = serializers.UUIDField()
     members = serializers.ListField(
         child=serializers.DictField(),
         min_length=1,
         max_length=100,
-        help_text="[{'user_id': 1, 'role_in_group': 'STUDENT'}, ...]"
+        help_text="[{'user_id': 1, 'role_in_group': 'STUDENT'}, ...]",
     )
 
+    def _validate_members_structure(self, members_data):
+        allowed_roles = {"STUDENT", "TEACHER"}
+        for i, m in enumerate(members_data):
+            if not isinstance(m, dict):
+                raise serializers.ValidationError(
+                    {"members": f"Item {i} must be an object with user_id and role_in_group."}
+                )
+            uid = m.get("user_id")
+            role = m.get("role_in_group")
+            if uid is None:
+                raise serializers.ValidationError(
+                    {"members": f"Item {i} must have 'user_id'."}
+                )
+            if role not in allowed_roles:
+                raise serializers.ValidationError(
+                    {"members": f"Item {i}: role_in_group must be STUDENT or TEACHER."}
+                )
+
     def validate(self, attrs):
+        self._validate_members_structure(attrs["members"])
         from apps.core.tenant_utils import with_public_schema
         
         request = self.context.get("request")
@@ -260,38 +281,69 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
     def create(self, validated_data):
         group_id = validated_data["group_id"]
         members_data = validated_data["members"]
-        
-        existing_users = set(GroupMembership.objects.filter(
-            group_id=group_id
-        ).values_list('user_id', flat=True))
-        
-        new_memberships = []
-        created_ids = []
-        
+
+        # Dedupe by (user_id, role_in_group) to avoid IntegrityError on duplicate membership
+        seen = set()
+        unique_members = []
         for m in members_data:
-            if m['user_id'] not in existing_users:
-                new_memberships.append(GroupMembership(
-                    group_id=group_id,
-                    user_id=m['user_id'],
-                    role_in_group=m['role_in_group']
-                ))
-                created_ids.append(m['user_id'])
-                existing_users.add(m['user_id']) 
-        
-        # TRANSACTION BLOCK (Critical Fix)
+            key = (m["user_id"], m["role_in_group"])
+            if key not in seen:
+                seen.add(key)
+                unique_members.append(m)
+
         with transaction.atomic():
+            group = Group.objects.select_for_update().get(id=group_id)
+            existing_user_ids = set(
+                GroupMembership.objects.filter(group_id=group_id).values_list(
+                    "user_id", flat=True
+                )
+            )
+
+            new_memberships = []
+            new_student_count = 0
+            for m in unique_members:
+                uid = m["user_id"]
+                role = m["role_in_group"]
+                if uid in existing_user_ids:
+                    continue
+                new_memberships.append(
+                    GroupMembership(
+                        group_id=group_id,
+                        user_id=uid,
+                        role_in_group=role,
+                    )
+                )
+                existing_user_ids.add(uid)
+                if role == "STUDENT":
+                    new_student_count += 1
+
+            # Enforce max_students (group full)
+            if new_student_count > 0:
+                future_students = group.student_count + new_student_count
+                if future_students > group.max_students:
+                    raise serializers.ValidationError(
+                        {
+                            "group": (
+                                f"Group allows at most {group.max_students} students. "
+                                f"Adding {new_student_count} would make {future_students}."
+                            )
+                        }
+                    )
+
             if new_memberships:
                 GroupMembership.objects.bulk_create(new_memberships)
-                
-                # Lock group row to prevent race conditions during count update
-                group = Group.objects.select_for_update().get(id=group_id)
-                group.student_count = GroupMembership.objects.filter(group=group, role_in_group="STUDENT").count()
-                group.teacher_count = GroupMembership.objects.filter(group=group, role_in_group="TEACHER").count()
-                group.save(update_fields=['student_count', 'teacher_count'])
-            
+                group.student_count = GroupMembership.objects.filter(
+                    group=group, role_in_group="STUDENT"
+                ).count()
+                group.teacher_count = GroupMembership.objects.filter(
+                    group=group, role_in_group="TEACHER"
+                ).count()
+                group.save(update_fields=["student_count", "teacher_count"])
+
+        created_ids = [gm.user_id for gm in new_memberships]
         return {
             "group_id": group_id,
             "created_count": len(new_memberships),
-            "skipped_count": len(members_data) - len(new_memberships),
-            "created_user_ids": created_ids
+            "skipped_count": len(unique_members) - len(new_memberships),
+            "created_user_ids": created_ids,
         }

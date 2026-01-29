@@ -1,3 +1,4 @@
+#api/v1/routers.py
 from rest_framework.routers import DefaultRouter
 
 from apps.centers.views import (

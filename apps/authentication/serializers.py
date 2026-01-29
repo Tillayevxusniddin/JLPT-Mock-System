@@ -1,19 +1,28 @@
-#apps/authentication/serializers.py
-from rest_framework import serializers
+# apps/authentication/serializers.py
+"""
+Authentication serializers for multi-tenant JLPT system.
+
+- All User lookups use the default manager (SoftDeleteUserManager), so
+  soft-deleted users cannot log in or reset password.
+- Email uniqueness is enforced per center (UniqueConstraint + validation).
+"""
+import logging
+
+from django.conf import settings
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
 from django.contrib.auth import authenticate
-from rest_framework_simplejwt.tokens import RefreshToken
-from apps.authentication.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.core.mail import send_mail
-from django.template.loader import render_to_string
-from django.conf import settings
-from drf_spectacular.utils import extend_schema_field
-import logging
+from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from apps.authentication.models import User
 
 logger = logging.getLogger(__name__)
+
 try:
     from apps.centers.models import Invitation
 except Exception:  # pragma: no cover
@@ -21,18 +30,16 @@ except Exception:  # pragma: no cover
 
 
 def get_user_groups_from_tenant(user):
-    if not user.center_id:
+    if not getattr(user, "center_id", None):
         return []
     try:
         from apps.centers.models import Center
         from apps.core.tenant_utils import with_public_schema, schema_context
 
         def get_schema_name():
-            try:
-                return Center.objects.values_list('schema_name', flat=True).get(id=user.center_id)
-            except Center.DoesNotExist:
-                return None
-    
+            c = Center.objects.filter(id=user.center_id).values_list("schema_name", flat=True).first()
+            return c
+
         schema_name = with_public_schema(get_schema_name)
         if not schema_name:
             return []
@@ -40,38 +47,44 @@ def get_user_groups_from_tenant(user):
         with schema_context(schema_name):
             from apps.groups.models import GroupMembership
 
-            memberships = GroupMembership.objects.filter(
-                user_id=user.id
-            ).select_related('group').values(
-                'group__id', 'group__name', 'role_in_group'
+            memberships = GroupMembership.objects.filter(user_id=user.id).values(
+                "group__id", "group__name", "role_in_group"
             )
-
             return [
-                {
-                    "id": m['group__id'],
-                    "name": m['group__name'],
-                    "role": m['role_in_group']
-                }
+                {"id": m["group__id"], "name": m["group__name"], "role": m["role_in_group"]}
                 for m in memberships
             ]
     except Exception as e:
-        logger.error(f"Error fetching groups for user {user.id}: {e}")
+        logger.exception("Error fetching groups for user %s: %s", user.id, e)
         return []
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
-    role = serializers.ChoiceField(choices=[('TEACHER', 'Teacher'), ('STUDENT', 'Student')])
+    role = serializers.ChoiceField(
+        choices=[("TEACHER", "Teacher"), ("STUDENT", "Student")]
+    )
 
     class Meta:
         model = User
         fields = [
-            "id", "email", "first_name", "last_name", "avatar", 
-            "role", "password", "is_active"
+            "id", "email", "first_name", "last_name", "avatar",
+            "role", "password", "is_active",
         ]
+
+    def validate_email(self, value):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "center_id", None):
+            return value
+        if User.objects.filter(email=value, center_id=request.user.center_id).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists in this center."
+            )
+        return value
 
     def create(self, validated_data):
         from django.db import transaction
+
         request = self.context.get("request")
         validated_data["center_id"] = request.user.center_id
         validated_data["is_approved"] = True
@@ -105,12 +118,19 @@ class UserListSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "role", "center", "is_approved"]
 
     def get_center_avatar(self, obj):
-        if not obj.center_id: return None
+        if not obj.center_id:
+            return None
         try:
             from apps.core.tenant_utils import with_public_schema
             from apps.centers.models import Center
-            return with_public_schema(lambda: Center.objects.get(id=obj.center_id).avatar.url if Center.objects.get(id=obj.center_id).avatar else None)
-        except: return None
+
+            def _get():
+                c = Center.objects.filter(id=obj.center_id).first()
+                return c.avatar.url if c and c.avatar else None
+
+            return with_public_schema(_get)
+        except Exception:
+            return None
 
     
 class UserSerializer(serializers.ModelSerializer):
@@ -130,12 +150,20 @@ class UserSerializer(serializers.ModelSerializer):
         return get_user_groups_from_tenant(obj)
 
     def get_center_info(self, obj):
-        if not obj.center_id: return None
+        if not obj.center_id:
+            return None
         try:
             from apps.core.tenant_utils import with_public_schema
             from apps.centers.models import Center
-            return with_public_schema(lambda: list(Center.objects.filter(id=obj.center_id).values('id', 'name', 'is_active'))[0])
-        except: return None
+
+            def _get():
+                return Center.objects.filter(id=obj.center_id).values(
+                    "id", "name", "is_active"
+                ).first()
+
+            return with_public_schema(_get)
+        except Exception:
+            return None
 
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -158,12 +186,24 @@ class UserManagementSerializer(serializers.ModelSerializer):
     def get_my_groups(self, obj):
         return get_user_groups_from_tenant(obj)
 
+    def validate_email(self, value):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "center_id", None):
+            return value
+        if User.objects.filter(email=value, center_id=request.user.center_id).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists in this center."
+            )
+        return value
+
     def create(self, validated_data):
         from django.db import transaction
+
+        from apps.centers.models import Center
+        from apps.core.tenant_utils import set_public_schema
+
         password = validated_data.pop("password", None)
         request = self.context.get("request")
-        from apps.core.tenant_utils import set_public_schema
-        from apps.centers.models import Center
         set_public_schema()
         validated_data["center"] = Center.objects.get(id=request.user.center_id)
 
@@ -184,46 +224,73 @@ class RegisterSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
     def validate(self, data):
-        from django.db import transaction
         if Invitation is None:
-            raise serializers.ValidationError({"invitation_code": "Invitation feature unavailable."})
-
+            raise serializers.ValidationError(
+                {"invitation_code": "Invitation feature unavailable."}
+            )
         code = data.get("invitation_code")
         if not code:
-            raise serializers.ValidationError({"invitation_code": "Invitation code is required."})
+            raise serializers.ValidationError(
+                {"invitation_code": "Invitation code is required."}
+            )
         try:
-            with transaction.atomic():
-                invitation = Invitation.objects.select_for_update().get(code=code, status="PENDING")
-                if invitation.target_user_id is not None:
-                    raise serializers.ValidationError({"invitation_code": "Invitation already claimed."})
-                if invitation.is_expired:
-                    raise serializers.ValidationError({"invitation_code": "Invitation expired."})
-                if invitation.role in ['OWNER', 'CENTER_ADMIN']:
-                    raise serializers.ValidationError({
-                        "invitation_code": "Administrators cannot register via public API. Please contact system support."
-                    })
+            invitation = Invitation.objects.get(code=code, status="PENDING")
         except Invitation.DoesNotExist:
             raise serializers.ValidationError({"invitation_code": "Invalid code."})
+        if invitation.target_user_id is not None:
+            raise serializers.ValidationError(
+                {"invitation_code": "Invitation already claimed."}
+            )
+        if invitation.is_expired:
+            raise serializers.ValidationError(
+                {"invitation_code": "Invitation expired."}
+            )
+        if invitation.role in ("OWNER", "CENTER_ADMIN"):
+            raise serializers.ValidationError({
+                "invitation_code": (
+                    "Administrators cannot register via public API. "
+                    "Please contact system support."
+                ),
+            })
+        email = data.get("email")
+        if email and User.objects.filter(email=email, center_id=invitation.center_id).exists():
+            raise serializers.ValidationError(
+                {"email": "A user with this email already exists in this center."}
+            )
         data["_invitation"] = invitation
         data.pop("invitation_code", None)
         return data
 
     def create(self, validated_data):
-
         from django.db import transaction
+
         invitation = validated_data.pop("_invitation")
         password = validated_data.pop("password")
         with transaction.atomic():
+            invitation = Invitation.objects.select_for_update().get(pk=invitation.pk)
+            if invitation.target_user_id is not None:
+                raise serializers.ValidationError(
+                    {"invitation_code": "Invitation already claimed."}
+                )
             user = User.objects.create_user(
                 role=invitation.role,
                 center=invitation.center,
                 is_approved=False,
                 password=password,
-                **validated_data
+                **validated_data,
             )
-        invitation.target_user = user
-        invitation.save()
+            invitation.target_user = user
+            invitation.save(update_fields=["target_user_id"])
         return user
+
+class LogoutRequestSerializer(serializers.Serializer):
+    """Request body for Logout: only the refresh token is required (same token returned by Login)."""
+
+    refresh = serializers.CharField(
+        required=True,
+        help_text="JWT refresh token to blacklist; required for logout.",
+    )
+
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -274,11 +341,12 @@ class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate(self, data):
-        try:
-            data["user"] = User.objects.get(email=data["email"], is_active=True)
-        except User.DoesNotExist:
-            # Do not leak existence; still pretend success
-            data["user"] = None
+        # Use filter().first() so soft-deleted users (excluded by default manager) are ignored.
+        # Do not leak user existence: always return same success message.
+        data["user"] = User.objects.filter(
+            email=data["email"],
+            is_active=True,
+        ).first()
         return data
 
     def save(self, **kwargs):
@@ -312,13 +380,13 @@ class PasswordResetRequestSerializer(serializers.Serializer):
                 fail_silently=False,
             )
         except Exception as e:
-            # Log the error but don't reveal it to the user
-            logger.error(
-                f"Failed to send password reset email to {user.email}: {e}",
-                exc_info=True,
-                extra={"user_id": user.id, "email": user.email}
+            logger.exception(
+                "Failed to send password reset email to %s: %s",
+                user.email,
+                e,
+                extra={"user_id": user.id},
             )
-        
+            # Return same message so we don't leak send failure to client
         return {"detail": "Password reset email sent."}
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -327,14 +395,22 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        # Decode uid (BigAutoField id)
         try:
-            uid = int(force_str(urlsafe_base64_decode(data["uid"])))
-            user = User.objects.get(id=uid, is_active=True)
-        except Exception:
-            raise serializers.ValidationError({"uid": "Invalid or expired token."})
+            raw = urlsafe_base64_decode(data["uid"])
+            uid = int(force_str(raw))
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(
+                {"uid": "Invalid or expired link."}
+            )
+        user = User.objects.filter(id=uid, is_active=True).first()
+        if not user:
+            raise serializers.ValidationError(
+                {"uid": "Invalid or expired link."}
+            )
         if not PasswordResetTokenGenerator().check_token(user, data["token"]):
-            raise serializers.ValidationError({"token": "Invalid or expired token."})
+            raise serializers.ValidationError(
+                {"token": "Invalid or expired link."}
+            )
         validate_password(data["new_password"], user)
         data["user"] = user
         return data

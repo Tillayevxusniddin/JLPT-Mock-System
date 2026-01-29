@@ -17,13 +17,13 @@ def custom_preprocessing_hook(endpoints):
     return filtered
 
 def set_schema_for_spectacular():
-    from apps.organizations.models import Organization
+    from apps.centers.models import Center
 
     try:
-        organization = Organization.objects.filter(status='ACTIVE').first()
-        if organization:
-            connection.set_tenant(organization)
-            return organization.schema_name
+        center = Center.objects.filter(status='ACTIVE').first()
+        if center:
+            connection.set_tenant(center)
+            return center.schema_name
 
     except Exception:
         pass

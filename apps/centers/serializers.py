@@ -86,15 +86,21 @@ class OwnerCenterListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
     
-    #TODO: Optimization required -> N+1
     def get_centeradmin_emails(self, obj) -> list:
-        """Get all CENTER_ADMIN users for this center."""
-        admins = User.objects.filter(
-            center_id=obj.id,
-            role="CENTER_ADMIN",
-            is_active=True
-        ).values('id', 'email', 'first_name', 'last_name')
-        return list(admins)
+        """Get CENTER_ADMIN users for this center (use prefetched center_admins when available)."""
+        admins = getattr(obj, "center_admins", None)
+        if admins is not None:
+            return [
+                {"id": a.id, "email": a.email, "first_name": a.first_name, "last_name": a.last_name}
+                for a in admins
+            ]
+        return list(
+            User.objects.filter(
+                center_id=obj.id,
+                role="CENTER_ADMIN",
+                is_active=True,
+            ).values("id", "email", "first_name", "last_name")
+        )
 
 # --- INVITATION SERIALIZERS ---
 

@@ -1,11 +1,22 @@
-#apps/authentication/managers.py
+# apps/authentication/managers.py
+"""
+User manager that excludes soft-deleted users from all queries.
+
+- Default manager (User.objects) never returns soft-deleted users, so
+  authenticate(), password reset, and any lookup by email/id will not
+  see them. Use User.global_objects for admin/analytics if you need
+  to include soft-deleted users.
+"""
 from django.contrib.auth.models import BaseUserManager
+
 from apps.core.managers import SoftDeleteManager
 
-class SoftDeleteUserManager(BaseUserManager):
 
+class SoftDeleteUserManager(BaseUserManager):
     def get_queryset(self):
-        return SoftDeleteManager(self.model, using=self._db).filter(deleted_at__isnull=True)
+        return SoftDeleteManager(self.model, using=self._db).filter(
+            deleted_at__isnull=True
+        )
 
     def _create_user(self, email, password=None, **extra_fields):
         if not email:

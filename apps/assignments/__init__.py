@@ -1,0 +1,1 @@
+#apps/assignments/__init__.py

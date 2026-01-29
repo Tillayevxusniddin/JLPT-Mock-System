@@ -36,16 +36,16 @@ def approve_invitation(invitation: Invitation, approver: User) -> User:
     target.center = invitation.center
     role = invitation.role
     is_guest = invitation.is_guest
-    
-    migrating_guest_to_student = (role == "STUDENT" and target.role == "GUEST")
+    migrating_guest_to_student = role == "STUDENT" and target.role == "GUEST"
 
-    if is_guest:
+    # Handle GUEST→STUDENT upgrade first (approving a guest invitation for STUDENT)
+    if migrating_guest_to_student:
+        target.role = "STUDENT"
+        logger.info("Upgrading GUEST user %s to STUDENT.", target.id)
+    elif is_guest:
         target.role = "GUEST"
     elif role == "GUEST":
         target.role = "GUEST"
-    elif migrating_guest_to_student:
-        target.role = "STUDENT"
-        logger.info(f"Upgrading GUEST user {target.id} to STUDENT.")
     elif role == "STUDENT":
         target.role = "STUDENT"
     elif role == "TEACHER":

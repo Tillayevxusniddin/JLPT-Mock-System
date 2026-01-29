@@ -1,68 +1,63 @@
-#apps/centers/views.py
+# apps/centers/views.py
+"""
+Centers app API views. OpenAPI schemas live in apps.centers.swagger.
+"""
+from django.db.models import Prefetch, Q, Count
+from django_filters import FilterSet
+import django_filters as filters_module
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, permissions, status, filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Q, Count
-from django_filters.rest_framework import DjangoFilterBackend
-from django_filters import FilterSet
-import django_filters as filters_module
-
-# Models
-try:
-    from apps.centers.models import Invitation, ContactRequest, Center
-except Exception:  # pragma: no cover
-    Invitation = None
-    ContactRequest = None
-    Center = None
 
 from apps.authentication.models import User
-
-# Serializers
 from apps.centers.serializers import (
-    InvitationCreateSerializer,
-    InvitationDetailSerializer,
-    InvitationApproveSerializer,
-    CenterSerializer,
-    OwnerCenterSerializer,
-    OwnerCenterListSerializer,
     CenterAdminCreateSerializer,
-    CenterAdminListSerializer,
     CenterAdminDetailSerializer,
+    CenterAdminListSerializer,
     CenterAdminUpdateSerializer,
+    CenterSerializer,
     ContactRequestCreateSerializer,
     ContactRequestListSerializer,
     ContactRequestUpdateSerializer,
     GuestListSerializer,
     GuestUpgradeSerializer,
+    InvitationApproveSerializer,
+    InvitationCreateSerializer,
+    InvitationDetailSerializer,
+    OwnerCenterListSerializer,
+    OwnerCenterSerializer,
 )
-
-# Permissions & Utils
+from apps.centers.swagger import (
+    center_admin_center_viewset_schema,
+    center_admin_create_schema,
+    center_avatar_upload_schema,
+    center_create_schema,
+    contact_request_create_schema,
+    guest_list_schema,
+    guest_upgrade_schema,
+    invitation_approve_schema,
+    invitation_create_schema,
+    invitation_list_schema,
+    owner_center_admin_viewset_schema,
+    owner_center_viewset_schema,
+    owner_contact_request_viewset_schema,
+)
 from apps.core.permissions import IsCenterAdmin, IsOwner
 from apps.core.tenant_utils import set_public_schema
 
-# Swagger Schemas (Agar bu fayl mavjud bo'lmasa, dekoratorlarni olib tashlash mumkin)
-# from apps.centers.swagger import (
-#     invitation_create_schema, invitation_list_schema, invitation_approve_schema,
-#     center_create_schema, center_admin_create_schema,
-#     owner_center_viewset_schema, owner_center_list_schema, owner_center_retrieve_schema,
-#     owner_center_create_schema, owner_center_update_schema, owner_center_partial_update_schema,
-#     owner_center_destroy_schema, owner_center_suspend_schema, owner_center_activate_schema,
-#     owner_center_admin_viewset_schema, owner_center_admin_list_schema, owner_center_admin_retrieve_schema,
-#     owner_center_admin_create_schema, owner_center_admin_update_schema, owner_center_admin_partial_update_schema,
-#     owner_center_admin_destroy_schema,
-#     center_admin_center_viewset_schema, center_admin_center_retrieve_schema,
-#     center_admin_center_update_schema, center_admin_center_partial_update_schema,
-#     contact_request_create_schema, owner_contact_request_viewset_schema,
-#     owner_contact_request_list_schema, owner_contact_request_retrieve_schema,
-#     owner_contact_request_update_schema, owner_contact_request_partial_update_schema,
-#     owner_contact_request_destroy_schema,
-#     guest_list_schema, guest_upgrade_schema,
-# )
+try:
+    from apps.centers.models import Center, ContactRequest, Invitation
+except Exception:  # pragma: no cover
+    Center = None
+    ContactRequest = None
+    Invitation = None
 
 
-# --- INVITATION VIEWS ---
+# ---- Invitations (Center Admin) ----
 
 
+@invitation_create_schema
 class InvitationCreateView(generics.CreateAPIView):
     serializer_class = InvitationCreateSerializer
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
@@ -97,6 +92,7 @@ class InvitationFilter(FilterSet):
         model = Invitation
         fields = ['role', 'status']
 
+@invitation_list_schema
 class InvitationListView(generics.ListAPIView):
     serializer_class = InvitationDetailSerializer
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
@@ -115,6 +111,7 @@ class InvitationListView(generics.ListAPIView):
         user = self.request.user
         return Invitation.objects.filter(center_id=user.center_id).order_by("-created_at")
 
+@invitation_approve_schema
 class InvitationApproveView(generics.GenericAPIView):
     serializer_class = InvitationApproveSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -128,9 +125,10 @@ class InvitationApproveView(generics.GenericAPIView):
         return Response({"detail": f"{user_name} approved by Center Admin."}, status=status.HTTP_200_OK)
 
 
-# --- OWNER VIEWS (CENTER MANAGEMENT) ---
+# ---- Owner: Centers ----
 
 
+@center_create_schema
 class CenterCreateView(generics.CreateAPIView):
     serializer_class = CenterSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwner]
@@ -139,6 +137,7 @@ class CenterCreateView(generics.CreateAPIView):
         set_public_schema()
         return super().create(request, *args, **kwargs)
 
+@center_admin_create_schema
 class CenterAdminCreateView(generics.GenericAPIView):
     serializer_class = CenterAdminCreateSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwner]
@@ -155,11 +154,8 @@ class CenterAdminCreateView(generics.GenericAPIView):
         user = serializer.save()
         return Response({"detail": "CenterAdmin yaratildi.", "user_id": str(user.id)}, status=status.HTTP_201_CREATED)
 
+@owner_center_viewset_schema
 class OwnerCenterViewSet(viewsets.ModelViewSet):
-    """
-    Owner-level CRUD for centers.
-    Handles Hard Delete via background task.
-    """
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     # Changed from is_active to status
@@ -178,14 +174,23 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
         if getattr(self, 'swagger_fake_view', False):
             return Center.objects.none()
         
-        # List uchun optimizatsiya
-        if self.action == 'list':
-            # Soft delete qilinganlarni ko'rsatmaymiz (agar soft delete ishlatilmasa, filterni olib tashlash mumkin)
-            # Lekin hard delete darhol o'chiradi, shuning uchun bu filter shart emas aslida.
-            return Center.objects.all().annotate(
-                teacher_count=Count('users', filter=Q(users__role='TEACHER'))
-            ).order_by("-created_at")
-        
+        if self.action == "list":
+            return (
+                Center.objects.all()
+                .annotate(
+                    teacher_count=Count("user_set", filter=Q(user_set__role="TEACHER"))
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "user_set",
+                        User.objects.filter(role="CENTER_ADMIN").only(
+                            "id", "email", "first_name", "last_name", "center_id"
+                        ),
+                        to_attr="center_admins",
+                    )
+                )
+                .order_by("-created_at")
+            )
         return Center.objects.all().order_by("created_at")
 
     def list(self, request, *args, **kwargs):
@@ -242,6 +247,7 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
         return Response({"status": "center activated"}, status=status.HTTP_200_OK)
 
 
+@owner_center_admin_viewset_schema
 class OwnerCenterAdminViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -310,10 +316,11 @@ class OwnerCenterAdminViewSet(viewsets.ModelViewSet):
         instance.soft_delete()
 
 
-# --- CENTER ADMIN VIEWS ---
+# ---- Center Admin: My Center ----
 
+
+@center_admin_center_viewset_schema
 class CenterAdminCenterViewSet(viewsets.ModelViewSet):
-    """CenterAdmin managing their own center."""
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
     serializer_class = CenterSerializer
     http_method_names = ['get', 'put', 'patch'] 
@@ -337,8 +344,8 @@ class CenterAdminCenterViewSet(viewsets.ModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
 
+@center_avatar_upload_schema
 class CenterAvatarUploadView(generics.UpdateAPIView):
-    """Upload/update center avatar."""
     serializer_class = CenterSerializer
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
     
@@ -364,18 +371,20 @@ class CenterAvatarUploadView(generics.UpdateAPIView):
         return Response(self.get_serializer(center).data, status=status.HTTP_200_OK)
 
 
-# --- CONTACT REQUEST VIEWS ---
+# ---- Public: Contact ----
 
 
+@contact_request_create_schema
 class ContactRequestCreateView(generics.CreateAPIView):
     serializer_class = ContactRequestCreateSerializer
     permission_classes = [permissions.AllowAny]
 
+@owner_contact_request_viewset_schema
 class OwnerContactRequestViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status']
-    search_fields = ['full_name', 'email', 'phone', 'message']
+    search_fields = ['full_name', 'phone_number', 'message', 'center_name']
     ordering_fields = ['created_at', 'status']
     ordering = ['-created_at']
     http_method_names = ['get', 'patch', 'delete', 'head', 'options']
@@ -413,9 +422,10 @@ class OwnerContactRequestViewSet(viewsets.ModelViewSet):
         instance.soft_delete()
 
 
-# --- GUEST VIEWS ---
+# ---- Center Admin: Guests ----
 
 
+@guest_list_schema
 class GuestListView(generics.ListAPIView):
     serializer_class = GuestListSerializer
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
@@ -434,6 +444,7 @@ class GuestListView(generics.ListAPIView):
 
 
 
+@guest_upgrade_schema
 class GuestUpgradeView(generics.GenericAPIView):
     serializer_class = GuestUpgradeSerializer
     permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]

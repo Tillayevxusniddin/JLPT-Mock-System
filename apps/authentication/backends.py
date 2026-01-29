@@ -1,116 +1,111 @@
-#apps/authentication/backends.py
-from django.contrib.auth.backends import ModelBackend
-from django.contrib.auth import get_user_model
-from django.db.models import Q
+# apps/authentication/backends.py
+"""
+Tenant-aware authentication backend for multi-tenant JLPT system.
+
+- Main domain (e.g. mikan.uz, api.mikan.uz): Only users with center=None (Owner).
+- Subdomain (e.g. edu1.mikan.uz): Only users belonging to Center(slug=edu1).
+
+Same email in two centers is isolated by center_id; a user cannot log into
+the wrong center because we resolve center from the request host first.
+"""
 import logging
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.backends import ModelBackend
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
+
+def _get_main_hosts():
+    """Main-domain hosts where no center context is applied (Owner login)."""
+    return set(
+        getattr(
+            settings,
+            "AUTH_MAIN_DOMAIN_HOSTS",
+            ["localhost", "127.0.0.1", "mikan.uz", "www.mikan.uz", "api.mikan.uz"],
+        )
+    )
+
+
 class TenantAwareBackend(ModelBackend):
     """
-    Subdomain-based authentication backend.
-    
-    Extracts subdomain from request.get_host() and matches to Center.slug
-    to determine which center context the user is logging into.
-    
-    Examples:
-        edu1.mikan.uz → Center(slug='edu1')
-        edu2.mikan.uz → Center(slug='edu2')
-        mikan.uz      → No center (Owner/public login)
-        api.mikan.uz  → No center (API / owner login)
+    Subdomain-based authentication. Resolves center from request.get_host()
+    so the same email in two centers cannot log into the wrong one.
     """
-    
+
     def authenticate(self, request, username=None, password=None, **kwargs):
         if username is None:
             username = kwargs.get(User.USERNAME_FIELD)
-        
-        center_id = None
-        if request:
-            # NEW: Extract subdomain and find matching center
-            center_id = self._get_center_id_from_subdomain(request)
-        
+        center_id = self._get_center_id_from_subdomain(request) if request else None
+
         try:
             if center_id:
-                # Subdomain login: user must belong to this specific center
                 user = User.objects.get(email=username, center_id=center_id)
             else:
-                # Main domain login: Owner or users without center
                 user = User.objects.get(email=username, center__isnull=True)
-            
         except User.DoesNotExist:
-            logger.debug(f"User not found: {username}, center_id={center_id}")
+            logger.debug("User not found: email=%s, center_id=%s", username, center_id)
             return None
         except User.MultipleObjectsReturned:
-            logger.warning(f"Multiple users found for {username}, center_id={center_id}")
+            logger.warning(
+                "Multiple users for email=%s, center_id=%s", username, center_id
+            )
             return None
 
-        if user.check_password(password) and self.user_can_authenticate(user):
-            logger.info(f"✅ Authenticated {user.email} via subdomain (center_id={center_id})")
-            return user
-        
-        return None
-    
+        if not user.check_password(password):
+            return None
+        if not self.user_can_authenticate(user):
+            return None
+        if getattr(user, "is_deleted", False):
+            logger.debug("Rejected soft-deleted user: %s", user.email)
+            return None
+
+        logger.info(
+            "Authenticated %s (center_id=%s)",
+            user.email,
+            center_id,
+        )
+        return user
+
+    def user_can_authenticate(self, user):
+        """Reject inactive or soft-deleted users."""
+        if not super().user_can_authenticate(user):
+            return False
+        if getattr(user, "deleted_at", None) is not None:
+            return False
+        return True
+
     def _get_center_id_from_subdomain(self, request):
-        """
-        Extract subdomain from hostname and return matching Center ID.
-        
-        Examples:
-            edu1.jlpt.uz → Center(slug='edu1').id
-            edu2.jlpt.uz → Center(slug='edu2').id
-            jlpt.uz      → None (main domain)
-            localhost    → None
-        
-        Returns:
-            int or None: Center ID if valid subdomain found, else None
-        """
+        """Resolve center ID from host. Returns None for main domain."""
         from apps.centers.models import Center
-        
+
         try:
-            # Get hostname and remove port if present
-            host = request.get_host().split(':')[0]
-            
-            # Main domains (no tenant context)
-            MAIN_HOSTS = {
-                "localhost",
-                "127.0.0.1",
-                "mikan.uz",
-                "www.mikan.uz",
-                "api.mikan.uz",  # API host (no center context)
-            }
-            if host in MAIN_HOSTS:
-                logger.debug(f"Main domain detected: {host}, no center context")
+            host = request.get_host().split(":")[0].lower()
+            if host in _get_main_hosts():
+                logger.debug("Main domain: %s", host)
                 return None
-            
-            # Extract subdomain
-            # edu1.jlpt.uz → ['edu1', 'jlpt', 'uz']
-            parts = host.split('.')
-            
+
+            parts = host.split(".")
             if len(parts) < 3:
-                # Not a subdomain (e.g., jlpt.uz)
-                logger.debug(f"No subdomain in {host}")
+                logger.debug("No subdomain: %s", host)
                 return None
-            
+
             subdomain = parts[0]
-            logger.debug(f"Extracted subdomain: {subdomain}")
-            
-            # Find active Center by slug
-            center = Center.objects.filter(
-                slug=subdomain,
-                deleted_at__isnull=True  # Exclude soft-deleted
-            ).values('id', 'is_active').first()
-            
+            center = (
+                Center.objects.filter(
+                    slug=subdomain,
+                    deleted_at__isnull=True,
+                )
+                .values("id")
+                .first()
+            )
             if not center:
-                logger.warning(f"No center found for subdomain: {subdomain}")
+                logger.warning("No center for subdomain: %s", subdomain)
                 return None
-            
-            # Note: We don't check is_active here because that's validated
-            # during login in the serializer. Here we just need the center_id
-            # to find the correct user account.
-            
-            logger.info(f"✅ Matched subdomain '{subdomain}' to center ID {center['id']}")
-            return center['id']
-            
+            logger.info("Subdomain %s -> center_id=%s", subdomain, center["id"])
+            return center["id"]
         except Exception as e:
-            logger.error(f"Error extracting subdomain: {e}", exc_info=True)
+            logger.exception("Subdomain resolution error: %s", e)
             return None

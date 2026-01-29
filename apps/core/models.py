@@ -1,9 +1,18 @@
-#apps/core/models.py
-from django.db.models.signals import pre_migrate
+# apps/core/models.py
+"""
+Base models for multi-tenant JLPT exam system.
+
+- Soft delete: Default manager excludes deleted_at is not null. Use all_objects
+  to include soft-deleted rows. Reverse FK accessors may still return
+  soft-deleted instances; filter with .alive() or deleted_at__isnull=True when needed.
+"""
 import uuid
+
 from django.db import models
 from django.utils import timezone
+
 from apps.core.managers import SoftDeleteManager
+
 
 class UUIDModel(models.Model):
     

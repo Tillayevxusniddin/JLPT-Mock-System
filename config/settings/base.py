@@ -270,6 +270,15 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@nintei-shiken.co
 FRONTEND_URL_BASE = env("FRONTEND_URL_BASE", default="http://localhost:3000")
 
 AUTH_USER_MODEL = 'authentication.User'
+# Hosts treated as main domain (no center); TenantAwareBackend uses this.
+# Override in production.py or via env if needed (e.g. ["api.example.com"]).
+AUTH_MAIN_DOMAIN_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "mikan.uz",
+    "www.mikan.uz",
+    "api.mikan.uz",
+]
 AUTHENTICATION_BACKENDS = [
     "apps.authentication.backends.TenantAwareBackend",
     "axes.backends.AxesBackend",  # django-axes backend (wraps ModelBackend)

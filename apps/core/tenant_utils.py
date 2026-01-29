@@ -1,76 +1,114 @@
-#apps/core/tenant_utils.py
+# apps/core/tenant_utils.py
+"""
+PostgreSQL schema utilities for shared-DB, separate-schema multi-tenancy.
+
+- Context is tracked via contextvars so it is thread- and async-context safe
+  within a single request/task. With CONN_MAX_AGE > 0, always set search_path
+  at request start (TenantMiddleware) and end so pooled connections are safe.
+"""
 import re
 import contextvars
-from django.db import connection
 from contextlib import contextmanager
-from asgiref.sync import sync_to_async
 
-try: 
+from asgiref.sync import sync_to_async
+from django.db import connection
+
+try:
     from psycopg2 import sql
 except ImportError:
     sql = None
 
-SCHEMA_NAME_REGEX = re.compile(r'^[a-z0-9_]+$')
+SCHEMA_NAME_REGEX = re.compile(r"^[a-z0-9_]+$")
 MAX_SCHEMA_NAME_LENGTH = 63
+RESERVED_SCHEMAS = frozenset({"public", "information_schema", "pg_catalog", "pg_toast"})
 
 _current_schema = contextvars.ContextVar("current_schema", default="public")
+
 
 def get_current_schema():
     return _current_schema.get()
 
-def set_tenant_schema(schema_name):
-    if not SCHEMA_NAME_REGEX.match(schema_name): raise ValueError(f"Invalid schema name: {schema_name}")
-    if len(schema_name) > MAX_SCHEMA_NAME_LENGTH: raise ValueError(f"Schema name too long (max {MAX_SCHEMA_NAME_LENGTH}): {schema_name}")
 
+def _validate_schema_name(schema_name):
+    if not schema_name or not isinstance(schema_name, str):
+        raise ValueError("Schema name must be a non-empty string")
+    if schema_name in RESERVED_SCHEMAS and schema_name != "public":
+        raise ValueError(f"Reserved schema name: {schema_name}")
+    if schema_name != "public" and not SCHEMA_NAME_REGEX.match(schema_name):
+        raise ValueError(f"Invalid schema name: {schema_name}")
+    if len(schema_name) > MAX_SCHEMA_NAME_LENGTH:
+        raise ValueError(
+            f"Schema name too long (max {MAX_SCHEMA_NAME_LENGTH}): {schema_name}"
+        )
+
+
+def set_tenant_schema(schema_name):
+    _validate_schema_name(schema_name)
     with connection.cursor() as cursor:
         if sql:
-            cursor.execute( 
+            cursor.execute(
                 sql.SQL("SET search_path TO {}, public").format(
-                     sql.Identifier(schema_name) 
-                ) 
+                    sql.Identifier(schema_name)
+                )
             )
-        else: 
-            cursor.execute(f"SET search_path TO {schema_name}, public")
-        
+        else:
+            cursor.execute("SET search_path TO %s, public", [schema_name])
     _current_schema.set(schema_name)
-            
-def set_public_schema(): 
-    with connection.cursor() as cursor: 
-        cursor.execute("SET search_path TO public") 
-    _current_schema.set("public")
+
+
+def set_public_schema():
+    """Reset search_path to public. Always syncs _current_schema even on failure."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SET search_path TO public")
+    finally:
+        _current_schema.set("public")
 
 def reset_tenant_schema():
     set_public_schema()
 
 def schema_exists(schema_name):
-    if not SCHEMA_NAME_REGEX.match(schema_name):
+    if not schema_name or not SCHEMA_NAME_REGEX.match(schema_name):
         return False
     with connection.cursor() as cursor:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT EXISTS(
-                SELECT 1 FROM information_schema.schemata 
+                SELECT 1 FROM information_schema.schemata
                 WHERE schema_name = %s
             )
-        """, [schema_name])
+            """,
+            [schema_name],
+        )
         return cursor.fetchone()[0]
 
-def schema_ready(schema_name, table_name="groups_group"): #for example groups_group table
-    if not schema_exists(schema_name): return False
 
+def schema_ready(schema_name, table_name="groups_group"):
+    """Return True if the schema exists and contains the given table."""
+    if not schema_exists(schema_name):
+        return False
     try:
         with connection.cursor() as cursor:
-            cursor.execute(""" 
-                SELECT EXISTS ( 
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_schema = %s AND table_name = %s 
-                ) 
-            """, [schema_name, table_name])
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = %s AND table_name = %s
+                )
+                """,
+                [schema_name, table_name],
+            )
             return cursor.fetchone()[0]
-    except Exception as e:
+    except Exception:
         return False
+
 
 @contextmanager
 def schema_context(schema_name):
+    """
+    Execute a block with search_path set to the given tenant schema, then restore.
+    Safe for nested use; restores the previous schema (public or tenant) on exit.
+    """
     previous_schema = get_current_schema()
     try:
         set_tenant_schema(schema_name)
@@ -79,9 +117,14 @@ def schema_context(schema_name):
         if previous_schema == "public":
             set_public_schema()
         else:
-            set_tenant_schema(previous_schema)
+            try:
+                set_tenant_schema(previous_schema)
+            except Exception:
+                set_public_schema()
+
 
 def with_public_schema(func):
+    """Run func with search_path set to public, then restore previous schema."""
     previous_schema = get_current_schema()
     try:
         set_public_schema()
@@ -90,12 +133,16 @@ def with_public_schema(func):
         if previous_schema == "public":
             set_public_schema()
         else:
-            set_tenant_schema(previous_schema)
+            try:
+                set_tenant_schema(previous_schema)
+            except Exception:
+                set_public_schema()
+
 
 def get_public_user_by_id(user_id):
     from django.contrib.auth import get_user_model
+
     User = get_user_model()
-    
     previous_schema = get_current_schema()
     try:
         set_public_schema()
@@ -106,24 +153,35 @@ def get_public_user_by_id(user_id):
         if previous_schema == "public":
             set_public_schema()
         else:
-            set_tenant_schema(previous_schema)
+            try:
+                set_tenant_schema(previous_schema)
+            except Exception:
+                set_public_schema()
 
 # =============================================================================
-# ASYNC-SAFE SCHEMA SWITCHING FUNCTIONS FOR DJANGO CHANNELS
+# ASYNC SCHEMA SWITCHING (Django Channels)
 # =============================================================================
+# Each sync_to_async call may run in a different thread and use a different
+# connection from the pool. For WebSocket consumers, prefer wrapping each
+# message handler's DB work in database_sync_to_async(lambda: (set_tenant_schema(s); do_work()))
+# so the same connection is used for SET search_path and the subsequent queries.
 
 async def set_tenant_schema_async(schema_name):
     await sync_to_async(set_tenant_schema)(schema_name)
 
+
 async def set_public_schema_async():
     await sync_to_async(set_public_schema)()
+
 
 async def reset_tenant_schema_async():
     await sync_to_async(reset_tenant_schema)()
 
+
 async def schema_exists_async(schema_name):
     return await sync_to_async(schema_exists)(schema_name)
 
-async def schema_ready_async(schema_name):
-    return await sync_to_async(schema_ready)(schema_name, table_name="groups_group")
+
+async def schema_ready_async(schema_name, table_name="groups_group"):
+    return await sync_to_async(schema_ready)(schema_name, table_name=table_name)
 
