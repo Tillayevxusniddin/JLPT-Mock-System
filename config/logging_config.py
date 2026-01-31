@@ -1,14 +1,17 @@
-#config/logging_config.py
+# config/logging_config.py
 """
 Logging configuration for Django with JSON formatting for Loki/Promtail.
-...
+RequestIDFilter: sets request_id, path, method, schema_name from request (HTTP/WS).
+TenantSchemaFilter: sets schema_name from contextvars when no request (Celery/workers).
 """
 
 import json
 import logging
 from datetime import datetime
+
 from django.conf import settings
 from apps.core.middleware import get_current_request
+
 
 class JSONFormatter(logging.Formatter):
     def format(self, record):
@@ -28,8 +31,9 @@ class JSONFormatter(logging.Formatter):
         if hasattr(record, 'user_id'):
             log_data['user_id'] = record.user_id
         
-        if hasattr(record, 'schema_name'):
-            log_data['schema_name'] = record.schema_name
+        if hasattr(record, "schema_name"):
+            log_data["schema_name"] = record.schema_name
+            log_data["tenant_schema"] = record.schema_name  # Loki / multi-tenant queries
 
         if hasattr(record, 'request_id'):
             log_data['request_id'] = record.request_id
@@ -68,9 +72,25 @@ class RequestIDFilter(logging.Filter):
                         else:
                             record.schema_name = 'public'
                     else:
-                        record.schema_name = 'public'
+                        record.schema_name = "public"
 
         except Exception:
             pass
 
+        return True
+
+
+class TenantSchemaFilter(logging.Filter):
+    """
+    Set record.schema_name from contextvars (get_current_schema) when not already set.
+    Ensures Celery workers and other non-request contexts log tenant_schema for Loki.
+    """
+    def filter(self, record):
+        if getattr(record, "schema_name", None) is not None:
+            return True
+        try:
+            from apps.core.tenant_utils import get_current_schema
+            record.schema_name = get_current_schema() or "public"
+        except Exception:
+            record.schema_name = "public"
         return True

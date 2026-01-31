@@ -2,28 +2,21 @@
 from django.core.exceptions import ValidationError
 from .models import MockTest, TestSection, QuestionGroup, Question
 
+# Message returned as 400 when modifying a published test (used by views and serializers)
+PUBLISHED_TEST_EDIT_MESSAGE = "Cannot modify a published test."
+
 
 def validate_mock_test_editable(mock_test_instance):
     """
     Validate that a MockTest instance is editable.
-    
     Raises ValidationError if the MockTest status is PUBLISHED.
-    This function should be called before any create/update/delete operations
-    on MockTest or its child objects (TestSection, QuestionGroup, Question).
-    
-    Args:
-        mock_test_instance: MockTest instance to validate
-        
-    Raises:
-        ValidationError: If the MockTest is PUBLISHED and cannot be edited
+    Call before any create/update/delete on MockTest or its children
+    (TestSection, QuestionGroup, Question).
     """
     if not mock_test_instance:
         raise ValidationError("MockTest instance is required.")
-    
     if mock_test_instance.status == MockTest.Status.PUBLISHED:
-        raise ValidationError(
-            "Cannot modify a published MockTest. Please change the status to DRAFT first."
-        )
+        raise ValidationError(PUBLISHED_TEST_EDIT_MESSAGE)
 
 
 def get_parent_mock_test(obj):

@@ -1,29 +1,9 @@
-#apps/materials/serializers.py
+# apps/materials/serializers.py
 import os
 import mimetypes
 from rest_framework import serializers
 from .models import Material
-
-
-class UserSummarySerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    full_name = serializers.CharField()
-
-    @staticmethod
-    def from_user(user):
-        if not user:
-            return None
-        full_name = ""
-        if getattr(user, "first_name", None) or getattr(user, "last_name", None):
-            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        if not full_name:
-            full_name = getattr(user, "email", None) or getattr(user, "username", None) or str(user.id)
-        return {
-            "id": user.id,
-            "full_name": full_name.strip()
-        }
-
-
+from apps.core.serializers import UserSummarySerializer
 from apps.groups.models import Group
 
 class GroupSummarySerializer(serializers.ModelSerializer):
@@ -85,10 +65,14 @@ class MaterialSerializer(serializers.ModelSerializer):
                     "file": f"File extension '{ext or 'unknown'}' does not match file_type '{effective_type}'. Allowed: {', '.join(sorted(allowed))}."
                 })
 
-            if hasattr(effective_file, 'content_type'):
-                mime_type = effective_file.content_type
+            if hasattr(effective_file, "content_type") and effective_file.content_type:
+                raw = effective_file.content_type
+                mime_type = raw.split(";")[0].strip().lower()
             else:
-                mime_type, _ = mimetypes.guess_type(getattr(effective_file, 'name', ''))
+                mime_type, _ = mimetypes.guess_type(
+                    getattr(effective_file, "name", "") or ""
+                )
+                mime_type = (mime_type or "").strip().lower()
 
             EXPECTED_MIME_TYPES = {
                 Material.FileType.PDF: {'application/pdf'},

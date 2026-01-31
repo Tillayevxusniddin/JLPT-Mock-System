@@ -5,27 +5,28 @@ from apps.core.tenant_utils import get_current_schema
 
 
 def tenant_material_upload_path(instance, filename):
+    """
+    Tenant-isolated upload path for S3/storage. Never relies on connection.tenant.
+    Uses get_current_schema() and Center lookup in public schema; fallback to
+    schema_name to prevent file collisions between centers.
+    """
+    from apps.core.tenant_utils import with_public_schema
     from apps.centers.models import Center
-    from django.db import connection
-    schema_name = get_current_schema()
 
-    if schema_name == 'public' or not schema_name:
+    schema_name = get_current_schema() or "public"
+
+    if schema_name == "public":
         return f"materials/{filename}"
 
     try:
-        from apps.core.tenant_utils import with_public_schema
-        
-        if hasattr(connection, 'tenant') and connection.tenant:
-            center_uuid = connection.tenant.id
-        else:
-            # Safe Center access via public schema
-            center = with_public_schema(lambda: Center.objects.get(schema_name=schema_name))
-            center_uuid = center.id
-        
-        return f"tenants/{center_uuid}/materials/{filename}"
-    except (Center.DoesNotExist, AttributeError):
-        # Fallback to schema_name
-        return f"tenants/{schema_name}/materials/{filename}"
+        center = with_public_schema(
+            lambda: Center.objects.filter(schema_name=schema_name).first()
+        )
+        if center is not None:
+            return f"tenants/{center.id}/materials/{filename}"
+    except Exception:
+        pass
+    return f"tenants/{schema_name}/materials/{filename}"
 
 
 class Material(TenantBaseModel):

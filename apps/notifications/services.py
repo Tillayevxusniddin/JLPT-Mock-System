@@ -83,6 +83,7 @@ class NotificationService:
             logger.warning("No channel layer configured; skipping WS dispatch.")
             return notification
 
+        # Server-only group name; no URL or client input. Prevents cross-tenant/user access.
         group_name = f"notify_{user_id}"
 
         try:

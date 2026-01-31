@@ -1,33 +1,31 @@
 # apps/attempts/views.py
+"""
+Thin ViewSet for Submissions. JLPT grading, snapshot, security, and OpenAPI
+schemas are documented in apps/attempts/swagger.py and services.py.
+"""
 
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.exceptions import ValidationError as DRFValidationError, PermissionDenied
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from .models import Submission
 from .serializers import (
     SubmissionSerializer,
     SubmissionResultSerializer,
     SubmissionAnswerSerializer,
-    ExamPaperSerializer
 )
 from .permissions import IsSubmissionOwnerOrTeacher, CanStartExam
 from .services import StartExamService, StartHomeworkService, GradingService
+from .swagger import submission_viewset_schema
 from apps.assignments.models import ExamAssignment, HomeworkAssignment
 
 
+@submission_viewset_schema
 class SubmissionViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Submission model.
-    
-    Custom Actions:
-    - start-exam: Start an exam attempt (POST)
-    - submit-exam: Submit exam answers (POST)
-    - my-results: Get student's own results (GET)
-    """
     serializer_class = SubmissionSerializer
     permission_classes = [IsAuthenticated, IsSubmissionOwnerOrTeacher]
     queryset = Submission.objects.all()
@@ -73,37 +71,39 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         return Submission.objects.none()
 
     def get_serializer_class(self):
-        """Return appropriate serializer based on action."""
-        if self.action == 'my_results':
+        if self.action == "my_results":
             return SubmissionResultSerializer
         return SubmissionSerializer
 
-    @action(detail=False, methods=['post'], url_path='start-exam', permission_classes=[IsAuthenticated, CanStartExam])
+    def perform_update(self, serializer):
+        if serializer.instance.status == Submission.Status.GRADED:
+            raise DRFValidationError(
+                {"detail": "Cannot modify a graded submission. Results are immutable."}
+            )
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.status == Submission.Status.GRADED:
+            raise DRFValidationError(
+                {"detail": "Cannot delete a graded submission. Results are immutable."}
+            )
+        instance.delete()
+
+    @action(detail=False, methods=["post"], url_path="start-exam", permission_classes=[IsAuthenticated, CanStartExam])
     def start_exam(self, request):
-        """
-        Start an exam attempt.
-        
-        POST /submissions/start-exam/
-        Body: {"exam_assignment_id": "uuid"}
-        
-        Returns:
-        - Exam paper data (MockTest structure without correct answers)
-        - Submission ID and started_at timestamp
-        """
         user = request.user
         
         # Only students can start exams
         if user.role not in ("STUDENT", "GUEST"):
             raise PermissionDenied("Only students can start exams.")
         
-        exam_assignment_id = request.data.get('exam_assignment_id')
+        exam_assignment_id = request.data.get("exam_assignment_id")
         if not exam_assignment_id:
-            raise ValidationError({"exam_assignment_id": "This field is required."})
-        
+            raise DRFValidationError({"exam_assignment_id": "This field is required."})
         try:
             submission, exam_paper_data = StartExamService.start_exam(user, exam_assignment_id)
-        except ValidationError as e:
-            raise ValidationError({"detail": str(e)})
+        except DjangoValidationError as e:
+            raise DRFValidationError({"detail": str(e)})
         
         return Response({
             "submission_id": str(submission.id),
@@ -112,109 +112,62 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             "message": "Exam started successfully. Timer begins now."
         }, status=status.HTTP_201_CREATED)
 
-    @action(detail=False, methods=['post'], url_path='submit-exam')
+    @action(detail=False, methods=["post"], url_path="submit-exam")
     def submit_exam(self, request):
-        """
-        Submit exam answers.
-        
-        POST /submissions/submit-exam/
-        Body: {
-            "submission_id": "uuid",
-            "answers": {"question_uuid": selected_option_index, ...}
-        }
-        
-        Returns:
-        - Submission confirmation
-        - Status: "Submission received" (score is hidden until published)
-        """
         user = request.user
         
         # Only students can submit exams
         if user.role not in ("STUDENT", "GUEST"):
             raise PermissionDenied("Only students can submit exams.")
         
-        submission_id = request.data.get('submission_id')
+        submission_id = request.data.get("submission_id")
         if not submission_id:
-            raise ValidationError({"submission_id": "This field is required."})
-        
-        # Get submission
+            raise DRFValidationError({"submission_id": "This field is required."})
         try:
             submission = Submission.objects.select_related(
-                'exam_assignment', 'homework_assignment'
+                "exam_assignment", "homework_assignment",
             ).get(id=submission_id, user_id=user.id)
         except Submission.DoesNotExist:
-            raise ValidationError({"submission_id": "Submission not found."})
-        
-        # Validate submission belongs to user
+            raise DRFValidationError({"submission_id": "Submission not found."})
         if submission.user_id != user.id:
             raise PermissionDenied("You can only submit your own submissions.")
-        
-        # Validate submission status
-        if submission.status not in [Submission.Status.STARTED, Submission.Status.SUBMITTED]:
-            raise ValidationError(
-                f"Cannot submit submission with status: {submission.status}"
+        if submission.status != Submission.Status.STARTED:
+            raise DRFValidationError(
+                {"detail": "Only STARTED submissions can be submitted. This attempt is already submitted or graded."}
             )
-        
-        # Validate and parse answers
-        answers_data = request.data.get('answers')
+        answers_data = request.data.get("answers")
         if not answers_data:
-            raise ValidationError({"answers": "This field is required."})
-        
+            raise DRFValidationError({"answers": "This field is required."})
         answer_serializer = SubmissionAnswerSerializer(data=answers_data)
         if not answer_serializer.is_valid():
-            raise ValidationError({"answers": answer_serializer.errors})
-        
+            raise DRFValidationError({"answers": answer_serializer.errors})
         student_answers = answer_serializer.validated_data
-        
-        # CRITICAL: Save snapshot before status changes to SUBMITTED
-        # This preserves the test state even if grading fails or is delayed
-        snapshot_data = GradingService.create_snapshot(submission)
-        
-        # Update submission status to SUBMITTED first
-        submission.status = Submission.Status.SUBMITTED
-        submission.completed_at = timezone.now()
-        submission.snapshot = snapshot_data  # Save snapshot for historical integrity
-        submission.save(update_fields=['status', 'completed_at', 'snapshot'])
-        
-        # Grade the submission (will update snapshot again if needed, but we already have it)
         try:
-            results = GradingService.grade_submission(submission, student_answers)
-        except ValidationError as e:
-            raise ValidationError({"detail": str(e)})
-        
+            GradingService.grade_submission(submission, student_answers)
+        except DjangoValidationError as e:
+            raise DRFValidationError({"detail": str(e)})
         return Response({
             "submission_id": str(submission.id),
             "status": submission.status,
             "message": "Submission received. Your result is under review.",
-            "note": "Results will be visible after the teacher publishes them."
+            "note": "Results will be visible after the teacher publishes them.",
         }, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['get'], url_path='my-results')
+    @action(detail=False, methods=["get"], url_path="my-results")
     def my_results(self, request):
-        """
-        Get student's own exam results.
-        
-        GET /submissions/my-results/?exam_assignment_id=uuid
-        
-        Returns:
-        - Results ONLY IF ExamAssignment.is_published is True
-        - If not published, returns message indicating results are not available
-        """
         user = request.user
         
         # Only students can view their own results
         if user.role not in ("STUDENT", "GUEST"):
             raise PermissionDenied("Only students can view their own results.")
         
-        exam_assignment_id = request.query_params.get('exam_assignment_id')
+        exam_assignment_id = request.query_params.get("exam_assignment_id")
         if not exam_assignment_id:
-            raise ValidationError({"exam_assignment_id": "This query parameter is required."})
-        
-        # Get exam assignment
+            raise DRFValidationError({"exam_assignment_id": "This query parameter is required."})
         try:
             exam_assignment = ExamAssignment.objects.get(id=exam_assignment_id)
         except ExamAssignment.DoesNotExist:
-            raise ValidationError({"exam_assignment_id": "Exam assignment not found."})
+            raise DRFValidationError({"exam_assignment_id": "Exam assignment not found."})
         
         # Check if results are published
         if not exam_assignment.is_published:
@@ -246,47 +199,32 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
     def list(self, request, *args, **kwargs):
-        """
-        List submissions (for teachers/admins to review).
-        
-        Supports filtering by exam_assignment_id or homework_assignment_id.
-        """
         queryset = self.filter_queryset(self.get_queryset())
-        
-        # Filter by assignment if provided
-        exam_assignment_id = request.query_params.get('exam_assignment_id')
-        homework_assignment_id = request.query_params.get('homework_assignment_id')
-        
+        exam_assignment_id = request.query_params.get("exam_assignment_id")
+        homework_assignment_id = request.query_params.get("homework_assignment_id")
         if exam_assignment_id:
             queryset = queryset.filter(exam_assignment_id=exam_assignment_id)
-        
         if homework_assignment_id:
             queryset = queryset.filter(homework_assignment_id=homework_assignment_id)
-        
         page = self.paginate_queryset(queryset)
+        items = page if page is not None else list(queryset)
+        user_ids = {s.user_id for s in items if s.user_id}
+        user_map = {}
+        if user_ids:
+            from apps.core.tenant_utils import with_public_schema
+            from apps.authentication.models import User
+            user_map = with_public_schema(
+                lambda: {u.id: u for u in User.objects.filter(id__in=user_ids)}
+            )
+        serializer = self.get_serializer(
+            items, many=True, context={"request": request, "user_map": user_map}
+        )
         if page is not None:
-            serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
-        
-        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['post'], url_path='homework-start')
+    @action(detail=False, methods=["post"], url_path="homework-start")
     def start_homework_item(self, request):
-        """
-        Start a homework item (MockTest or Quiz).
-        
-        POST /submissions/homework-start/
-        Body: {
-            "homework_assignment_id": "uuid",
-            "item_type": "mock_test" or "quiz",
-            "item_id": "uuid"
-        }
-        
-        Returns:
-        - Item paper data (MockTest or Quiz structure without correct answers)
-        - Submission ID and started_at timestamp
-        """
         user = request.user
         
         # Only students can start homework
@@ -298,23 +236,19 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         item_id = request.data.get('item_id')
         
         if not homework_assignment_id:
-            raise ValidationError({"homework_assignment_id": "This field is required."})
+            raise DRFValidationError({"homework_assignment_id": "This field is required."})
         if not item_type:
-            raise ValidationError({"item_type": "This field is required."})
+            raise DRFValidationError({"item_type": "This field is required."})
         if not item_id:
-            raise ValidationError({"item_id": "This field is required."})
-        
-        if item_type not in ['mock_test', 'quiz']:
-            raise ValidationError({
-                "item_type": "Must be 'mock_test' or 'quiz'."
-            })
-        
+            raise DRFValidationError({"item_id": "This field is required."})
+        if item_type not in ("mock_test", "quiz"):
+            raise DRFValidationError({"item_type": "Must be 'mock_test' or 'quiz'."})
         try:
             submission, item_data = StartHomeworkService.start_homework_item(
-                user, homework_assignment_id, item_type, item_id
+                user, homework_assignment_id, item_type, item_id,
             )
-        except ValidationError as e:
-            raise ValidationError({"detail": str(e)})
+        except DjangoValidationError as e:
+            raise DRFValidationError({"detail": str(e)})
         
         return Response({
             "submission_id": str(submission.id),
@@ -324,21 +258,8 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             "message": "Homework item started successfully."
         }, status=status.HTTP_201_CREATED)
 
-    @action(detail=False, methods=['post'], url_path='show-result')
+    @action(detail=False, methods=["post"], url_path="show-result")
     def show_result(self, request):
-        """
-        Practice mode: Show results without locking submission (GUESTS FORBIDDEN).
-        
-        POST /submissions/show-result/
-        Body: {
-            "submission_id": "uuid",
-            "answers": {"question_uuid": selected_option_index, ...}
-        }
-        
-        Returns:
-        - Grading results (same format as submit)
-        - Submission remains STARTED (can retry)
-        """
         user = request.user
         
         # GUESTS are FORBIDDEN from practice mode
@@ -351,48 +272,32 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         if user.role != "STUDENT":
             raise PermissionDenied("Only students can use practice mode.")
         
-        submission_id = request.data.get('submission_id')
+        submission_id = request.data.get("submission_id")
         if not submission_id:
-            raise ValidationError({"submission_id": "This field is required."})
-        
-        # Get submission
+            raise DRFValidationError({"submission_id": "This field is required."})
         try:
             submission = Submission.objects.select_related(
-                'homework_assignment', 'mock_test', 'quiz'
+                "homework_assignment", "mock_test", "quiz",
             ).get(id=submission_id, user_id=user.id)
         except Submission.DoesNotExist:
-            raise ValidationError({"submission_id": "Submission not found."})
-        
-        # Validate it's a homework submission
+            raise DRFValidationError({"submission_id": "Submission not found."})
         if not submission.homework_assignment:
-            raise ValidationError("Practice mode is only available for homework submissions.")
-        
-        # Validate submission is not already GRADED (locked)
+            raise DRFValidationError({"detail": "Practice mode is only available for homework submissions."})
         if submission.status == Submission.Status.GRADED:
-            raise ValidationError(
-                "This submission is already locked. You cannot use practice mode."
-            )
-        
-        # Validate deadline hasn't passed
+            raise DRFValidationError({"detail": "This submission is already locked. You cannot use practice mode."})
         if submission.homework_assignment.deadline <= timezone.now():
-            raise ValidationError("Homework deadline has passed.")
-        
-        # Validate and parse answers
-        answers_data = request.data.get('answers')
+            raise DRFValidationError({"detail": "Homework deadline has passed."})
+        answers_data = request.data.get("answers")
         if not answers_data:
-            raise ValidationError({"answers": "This field is required."})
-        
+            raise DRFValidationError({"answers": "This field is required."})
         answer_serializer = SubmissionAnswerSerializer(data=answers_data)
         if not answer_serializer.is_valid():
-            raise ValidationError({"answers": answer_serializer.errors})
-        
+            raise DRFValidationError({"answers": answer_serializer.errors})
         student_answers = answer_serializer.validated_data
-        
-        # Calculate results (dry-run, doesn't save)
         try:
             results = GradingService.calculate_result_dry_run(submission, student_answers)
-        except ValidationError as e:
-            raise ValidationError({"detail": str(e)})
+        except DjangoValidationError as e:
+            raise DRFValidationError({"detail": str(e)})
         
         return Response({
             "submission_id": str(submission.id),
@@ -402,79 +307,42 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             "note": "This is practice mode. Your submission is not locked."
         }, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['post'], url_path='submit-homework')
+    @action(detail=False, methods=["post"], url_path="submit-homework")
     def submit_homework(self, request):
-        """
-        Final submit: Submit homework item and lock the attempt.
-        
-        POST /submissions/submit-homework/
-        Body: {
-            "submission_id": "uuid",
-            "answers": {"question_uuid": selected_option_index, ...}
-        }
-        
-        Returns:
-        - Submission confirmation
-        - Results (if show_results_immediately=True)
-        """
         user = request.user
         
         # Only students/guests can submit homework
         if user.role not in ("STUDENT", "GUEST"):
             raise PermissionDenied("Only students can submit homework.")
         
-        submission_id = request.data.get('submission_id')
+        submission_id = request.data.get("submission_id")
         if not submission_id:
-            raise ValidationError({"submission_id": "This field is required."})
-        
-        # Get submission
+            raise DRFValidationError({"submission_id": "This field is required."})
         try:
             submission = Submission.objects.select_related(
-                'homework_assignment', 'mock_test', 'quiz'
+                "homework_assignment", "mock_test", "quiz",
             ).get(id=submission_id, user_id=user.id)
         except Submission.DoesNotExist:
-            raise ValidationError({"submission_id": "Submission not found."})
-        
-        # Validate it's a homework submission
+            raise DRFValidationError({"submission_id": "Submission not found."})
         if not submission.homework_assignment:
-            raise ValidationError("This endpoint is only for homework submissions.")
-        
-        # Validate submission is not already GRADED (locked)
-        if submission.status == Submission.Status.GRADED:
-            raise ValidationError(
-                "This submission is already locked. You cannot submit again."
+            raise DRFValidationError({"detail": "This endpoint is only for homework submissions."})
+        if submission.status != Submission.Status.STARTED:
+            raise DRFValidationError(
+                {"detail": "Only STARTED submissions can be submitted. This attempt is already submitted or graded."}
             )
-        
-        # Validate deadline hasn't passed
         if submission.homework_assignment.deadline <= timezone.now():
-            raise ValidationError("Homework deadline has passed.")
-        
-        # Validate and parse answers
-        answers_data = request.data.get('answers')
+            raise DRFValidationError({"detail": "Homework deadline has passed."})
+        answers_data = request.data.get("answers")
         if not answers_data:
-            raise ValidationError({"answers": "This field is required."})
-        
+            raise DRFValidationError({"answers": "This field is required."})
         answer_serializer = SubmissionAnswerSerializer(data=answers_data)
         if not answer_serializer.is_valid():
-            raise ValidationError({"answers": answer_serializer.errors})
-        
+            raise DRFValidationError({"answers": answer_serializer.errors})
         student_answers = answer_serializer.validated_data
-        
-        # CRITICAL: Save snapshot before status changes to SUBMITTED
-        # This preserves the test state even if grading fails or is delayed
-        snapshot_data = GradingService.create_snapshot(submission)
-        
-        # Update submission status to SUBMITTED first
-        submission.status = Submission.Status.SUBMITTED
-        submission.completed_at = timezone.now()
-        submission.snapshot = snapshot_data  # Save snapshot for historical integrity
-        submission.save(update_fields=['status', 'completed_at', 'snapshot'])
-        
-        # Grade the submission (locks it)
         try:
             results = GradingService.grade_submission(submission, student_answers)
-        except ValidationError as e:
-            raise ValidationError({"detail": str(e)})
+        except DjangoValidationError as e:
+            raise DRFValidationError({"detail": str(e)})
         
         # Check if results should be shown immediately
         show_results = submission.homework_assignment.show_results_immediately
@@ -493,37 +361,23 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         
         return Response(response_data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['get'], url_path='my-homework-results')
+    @action(detail=False, methods=["get"], url_path="my-homework-results")
     def my_homework_results(self, request):
-        """
-        Get student's own homework results for all items in a HomeworkAssignment.
-        
-        GET /submissions/my-homework-results/?homework_assignment_id=uuid
-        
-        Returns:
-        - Results for all items in the homework
-        """
         user = request.user
         
         # Only students can view their own results
         if user.role not in ("STUDENT", "GUEST"):
             raise PermissionDenied("Only students can view their own results.")
         
-        homework_assignment_id = request.query_params.get('homework_assignment_id')
+        homework_assignment_id = request.query_params.get("homework_assignment_id")
         if not homework_assignment_id:
-            raise ValidationError({
-                "homework_assignment_id": "This query parameter is required."
-            })
-        
-        # Get homework assignment
+            raise DRFValidationError({"homework_assignment_id": "This query parameter is required."})
         try:
             homework = HomeworkAssignment.objects.prefetch_related(
-                'mock_tests', 'quizzes'
+                "mock_tests", "quizzes",
             ).get(id=homework_assignment_id)
         except HomeworkAssignment.DoesNotExist:
-            raise ValidationError({
-                "homework_assignment_id": "Homework assignment not found."
-            })
+            raise DRFValidationError({"homework_assignment_id": "Homework assignment not found."})
         
         # Get all submissions for this homework
         submissions = Submission.objects.filter(
@@ -534,6 +388,9 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         
         results = []
         for submission in submissions:
+            time_taken_seconds = None
+            if submission.started_at and submission.completed_at:
+                time_taken_seconds = max(0, int((submission.completed_at - submission.started_at).total_seconds()))
             item_data = {
                 "submission_id": str(submission.id),
                 "item_type": submission.resource_type,
@@ -543,12 +400,10 @@ class SubmissionViewSet(viewsets.ModelViewSet):
                 "score": float(submission.score) if submission.score else None,
                 "started_at": submission.started_at,
                 "completed_at": submission.completed_at,
+                "time_taken_seconds": time_taken_seconds,
             }
-            
-            # Add results if show_results_immediately is True
             if homework.show_results_immediately:
                 item_data["results"] = submission.results
-            
             results.append(item_data)
         
         return Response({

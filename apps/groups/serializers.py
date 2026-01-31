@@ -1,4 +1,8 @@
 # apps/groups/serializers.py
+"""
+Group and membership serializers. Behavior is documented in apps.groups.swagger;
+GroupListSerializer uses teacher_map from context when present (list optimization).
+"""
 
 from django.db import transaction
 from rest_framework import serializers

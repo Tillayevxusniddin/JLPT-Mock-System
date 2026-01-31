@@ -1,85 +1,80 @@
-#apps/notifications/consumers.py
+# apps/notifications/consumers.py
+"""
+WebSocket consumer for real-time notifications.
+
+Security & isolation (master-level):
+- User identity comes ONLY from JWTAuthMiddleware (scope["user"]). No user IDs in URL or path.
+- Group name is server-controlled: notify_{user_id}. A user can only be added to their own
+  channel; they cannot subscribe to another user's or another tenant's channel.
+- Authentication handshake: JWT via query param ?token=<access> or header Authorization: Bearer <access>.
+"""
 import json
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
+
+logger = logging.getLogger(__name__)
 
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     """
-    WebSocket consumer for real-time notifications.
-    
-    Security: Each user gets a strictly personal notification channel.
-    No user IDs in URL to prevent IDOR attacks.
-    
-    Schema Compliance:
-    - User context is provided by TenantASGIMiddleware (via scope)
-    - Notifications are pushed to this consumer from signals (which handle schema context)
-    - This consumer just relays messages, so it's schema-agnostic
+    Real-time notifications over WebSocket.
+    Each user is added only to their personal group (notify_{user_id}) derived from scope["user"].
     """
 
     async def connect(self):
-        """
-        Handle WebSocket connection.
-        
-        Security Critical:
-        - Only authenticated users can connect
-        - Each user gets a personal group: notify_{user.id}
-        - No cross-tenant notification access possible
-        """
         user = self.scope.get("user")
-        
-        # Strictly reject unauthenticated connections
-        if user is None or isinstance(user, AnonymousUser) or not user.is_authenticated:
-            await self.close()
+        if user is None or isinstance(user, AnonymousUser):
+            logger.warning("NotificationConsumer: connection rejected (no user or anonymous)")
+            await self.close(code=4401)
             return
-        
-        # Create strictly personal group name (no cross-user access possible)
-        self.group_name = f"notify_{user.id}"
-        
+        if not getattr(user, "is_authenticated", False):
+            logger.warning("NotificationConsumer: connection rejected (user not authenticated)")
+            await self.close(code=4401)
+            return
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            logger.warning("NotificationConsumer: connection rejected (user has no id)")
+            await self.close(code=4401)
+            return
+        # Server-controlled group name; no client input. Ensures isolation.
+        self.group_name = f"notify_{user_id}"
         try:
-            # Add this connection to the user's personal notification group
-            await self.channel_layer.group_add(
-                self.group_name,
-                self.channel_name
-            )
-            
-            # Accept the WebSocket connection
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
             await self.accept()
+            logger.debug("NotificationConsumer: user %s connected to %s", user_id, self.group_name)
         except Exception as e:
-            # Log error and close connection
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to establish notification WebSocket for user {user.id}: {str(e)}")
-            await self.close()
+            logger.exception("NotificationConsumer: failed to add user %s to group: %s", user_id, e)
+            try:
+                await self.close(code=1011)
+            except Exception:
+                pass
 
     async def disconnect(self, close_code):
-        """
-        Handle WebSocket disconnection.
-        Remove the connection from the user's personal group.
-        """
-        if hasattr(self, 'group_name'):
-            await self.channel_layer.group_discard(
-                self.group_name,
-                self.channel_name
-            )
+        if hasattr(self, "group_name"):
+            try:
+                await self.channel_layer.group_discard(self.group_name, self.channel_name)
+            except Exception as e:
+                logger.warning("NotificationConsumer: group_discard failed: %s", e)
 
     async def send_notification(self, event):
         """
-        Handler method to send notifications to the WebSocket.
-        
-        Called when a notification is sent to the user's personal group.
-        The message is extracted from the event and sent to the client.
-        
-        Args:
-            event (dict): Event data containing the notification message
+        Send notification payload to the WebSocket client.
+        event["message"] = dict (serialized notification). Do not leak internal keys.
         """
+        message = event.get("message")
+        if message is None:
+            logger.warning("NotificationConsumer: send_notification called with no message")
+            return
         try:
-            message = event.get("message", {})
-            
-            # Send the notification to the WebSocket client
+            if not isinstance(message, dict):
+                message = {"message": str(message), "notification_type": "ANNOUNCEMENT"}
             await self.send(text_data=json.dumps(message))
+        except TypeError as e:
+            logger.warning("NotificationConsumer: JSON serialization failed: %s", e)
+            try:
+                await self.send(text_data=json.dumps({"error": "invalid_payload"}))
+            except Exception:
+                pass
         except Exception as e:
-            # Log error but don't crash - connection might be closed
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to send notification via WebSocket: {str(e)}")
+            logger.warning("NotificationConsumer: send failed: %s", e)

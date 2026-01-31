@@ -1,0 +1,25 @@
+[Unit]
+Description=JLPT Celery Beat Scheduler
+After=network.target redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/mikan
+Environment="PATH=/var/www/mikan/venv/bin"
+EnvironmentFile=/var/www/mikan/.env
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+ExecStart=/var/www/mikan/venv/bin/celery -A config beat \
+    --loglevel=info
+ExecStop=/bin/kill -TERM $MAINPID
+KillSignal=SIGTERM
+KillMode=mixed
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jlpt-celery-beat
+
+[Install]
+WantedBy=multi-user.target

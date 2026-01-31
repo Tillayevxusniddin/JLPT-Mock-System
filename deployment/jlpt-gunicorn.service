@@ -1,0 +1,25 @@
+[Unit]
+Description=JLPT Gunicorn (mikan.uz API)
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/mikan
+Environment="PATH=/var/www/mikan/venv/bin"
+EnvironmentFile=/var/www/mikan/.env
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+# Optional: log to files. Create /var/www/mikan/logs and set:
+# Environment=GUNICORN_LOG_DIR=/var/www/mikan/logs
+ExecStart=/var/www/mikan/venv/bin/gunicorn config.wsgi:application \
+    --config /var/www/mikan/deployment/gunicorn.conf.py
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

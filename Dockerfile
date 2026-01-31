@@ -1,39 +1,39 @@
-FROM python:3.11-slim
+# Multi-stage Dockerfile for Multi-Tenant JLPT (mikan.uz)
+# Stage 1: builder
+FROM python:3.11-slim AS builder
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Set work directory
+ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    postgresql-client \
-    gcc \
-    python3-dev \
-    musl-dev \
-    libpq-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+COPY deployment/requirements-deploy.txt ./
+RUN pip install --user -r requirements.txt -r requirements-deploy.txt
 
-# Copy project
-COPY . .
+# Stage 2: runtime
+FROM python:3.11-slim AS runtime
 
-# Create directories for media and static files
-RUN mkdir -p /app/media /app/staticfiles /app/logs
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app
 
-# Collect static files (will be overridden in docker-compose command)
-RUN python manage.py collectstatic --noinput || true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system --gid 1000 app \
+    && adduser --system --uid 1000 --gid 1000 --no-create-home app
 
-# Expose port
+COPY --from=builder /root/.local /home/app/.local
+RUN chown -R app:app /home/app/.local
+ENV PATH=/home/app/.local/bin:$PATH
+
+COPY --chown=app:app . .
+RUN mkdir -p /app/staticfiles /app/media /app/logs && chown -R app:app /app/staticfiles /app/media /app/logs
+
+USER app
 EXPOSE 8000
 
-# Run gunicorn
+# Default: Gunicorn (override in docker-compose for daphne/celery)
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]

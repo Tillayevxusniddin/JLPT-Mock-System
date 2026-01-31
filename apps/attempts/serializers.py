@@ -1,7 +1,13 @@
 # apps/attempts/serializers.py
+"""
+Attempts serializers. Exam/quiz paper serializers are sanitized (no correct_option_index
+or is_correct). Snapshot serializers include full structure for historical integrity.
+Documented in apps/attempts/swagger.py.
+"""
 
 from rest_framework import serializers
 from .models import Submission
+from apps.core.serializers import user_display_from_map
 from apps.mock_tests.models import MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
 
 
@@ -288,28 +294,28 @@ class SubmissionAnswerSerializer(serializers.Serializer):
 
 class SubmissionResultSerializer(serializers.ModelSerializer):
     """
-    Serializer for showing submission results after is_published=True.
-    
-    This serializer includes:
-    - Score information
-    - Detailed results breakdown
-    - JLPT pass/fail status
+    Serializer for showing submission results (exam/homework) after published.
+    Includes score, results breakdown, JLPT pass/fail, time_taken, percentage for dashboard.
     """
     assignment_title = serializers.SerializerMethodField()
     assignment_type = serializers.SerializerMethodField()
     mock_test_title = serializers.SerializerMethodField()
     mock_test_level = serializers.SerializerMethodField()
-    
+    time_taken_seconds = serializers.SerializerMethodField()
+    percentage = serializers.SerializerMethodField()
+
     class Meta:
         model = Submission
         fields = [
             "id", "user_id", "status", "started_at", "completed_at",
             "score", "results", "assignment_title", "assignment_type",
-            "mock_test_title", "mock_test_level", "created_at", "updated_at"
+            "mock_test_title", "mock_test_level",
+            "time_taken_seconds", "percentage",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "user_id", "status", "started_at", "completed_at",
-            "score", "results", "created_at", "updated_at"
+            "score", "results", "created_at", "updated_at",
         ]
 
     def get_assignment_title(self, obj):
@@ -329,51 +335,74 @@ class SubmissionResultSerializer(serializers.ModelSerializer):
         return None
 
     def get_mock_test_title(self, obj):
-        """Get mock test title."""
-        mock_test = obj.mock_test
-        if mock_test:
-            return mock_test.title
+        resource = obj.resource
+        if resource and hasattr(resource, "title"):
+            return resource.title
         return None
 
     def get_mock_test_level(self, obj):
-        """Get mock test level."""
-        mock_test = obj.mock_test
-        if mock_test:
-            return mock_test.level
+        resource = obj.resource
+        if resource and hasattr(resource, "level"):
+            return resource.level
+        return None
+
+    def get_time_taken_seconds(self, obj):
+        """Seconds between started_at and completed_at (for dashboard)."""
+        if obj.started_at and obj.completed_at:
+            delta = obj.completed_at - obj.started_at
+            return max(0, int(delta.total_seconds()))
+        return None
+
+    def get_percentage(self, obj):
+        """Percentage of max score from results JSON (for dashboard)."""
+        if not obj.results or not isinstance(obj.results, dict):
+            return None
+        total = obj.results.get("total_score")
+        max_s = obj.results.get("max_score")
+        if max_s and max_s > 0 and total is not None:
+            return round(float(total) / float(max_s) * 100, 2)
+        jlpt = obj.results.get("jlpt_result") or {}
+        pass_mark = jlpt.get("pass_mark")
+        if pass_mark and pass_mark > 0 and total is not None:
+            return round(float(total) / float(pass_mark) * 100, 2)
         return None
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
     """
-    Standard serializer for Submission model (used by teachers/admins).
+    Standard serializer for Submission (teachers/admins list/retrieve).
+    student_display is populated from user_map in context (batch-fetched, no N+1).
     """
     assignment_title = serializers.SerializerMethodField()
     assignment_type = serializers.SerializerMethodField()
-    
+    student_display = serializers.SerializerMethodField()
+
     class Meta:
         model = Submission
         fields = [
-            "id", "user_id", "exam_assignment", "homework_assignment",
+            "id", "user_id", "student_display", "exam_assignment", "homework_assignment",
             "status", "started_at", "completed_at", "score", "results",
-            "assignment_title", "assignment_type", "created_at", "updated_at"
+            "assignment_title", "assignment_type", "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "user_id", "status", "started_at", "completed_at",
-            "score", "results", "created_at", "updated_at"
+            "score", "results", "created_at", "updated_at",
         ]
 
     def get_assignment_title(self, obj):
-        """Get assignment title."""
         if obj.exam_assignment:
             return obj.exam_assignment.title
-        elif obj.homework_assignment:
+        if obj.homework_assignment:
             return obj.homework_assignment.title
         return None
 
     def get_assignment_type(self, obj):
-        """Get assignment type."""
         if obj.exam_assignment:
             return "exam"
-        elif obj.homework_assignment:
+        if obj.homework_assignment:
             return "homework"
         return None
+
+    def get_student_display(self, obj):
+        user_map = self.context.get("user_map")
+        return user_display_from_map(user_map, obj.user_id)

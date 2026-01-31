@@ -295,51 +295,36 @@ class GradingService:
     @transaction.atomic
     def grade_submission(submission, student_answers):
         """
-        Grade a submission based on student answers and SAVE the results.
-        
-        CRITICAL: Before grading, saves a complete snapshot of the test/quiz
-        (including correct answers) to preserve historical integrity.
-        
-        Args:
-            submission: Submission instance
-            student_answers: dict with format {question_uuid: selected_option_index}
-            
-        Returns:
-            dict: Grading results
+        Grade a submission and SAVE in one atomic transaction.
+        Immutability: Only STARTED submissions can be graded; once GRADED they cannot be modified.
+        CRITICAL: Creates snapshot (including correct answers) before grading for historical integrity.
         """
-        # Validate submission status
-        if submission.status not in [Submission.Status.STARTED, Submission.Status.SUBMITTED]:
-            raise ValidationError(f"Cannot grade submission with status: {submission.status}")
-        
-        # CRITICAL: Save snapshot BEFORE grading to preserve test state
+        if submission.status != Submission.Status.STARTED:
+            raise ValidationError(
+                f"Cannot grade submission with status: {submission.status}. Only STARTED submissions can be submitted."
+            )
         snapshot_data = GradingService.create_snapshot(submission)
-        
-        # Determine resource type and grade accordingly
         if submission.mock_test:
             results = GradingService._grade_mock_test(submission.mock_test, student_answers, save=True)
         elif submission.quiz:
             results = GradingService._grade_quiz(submission.quiz, student_answers, save=True)
         elif submission.exam_assignment and submission.exam_assignment.mock_test:
-            # Legacy exam submission
             results = GradingService._grade_mock_test(
                 submission.exam_assignment.mock_test,
                 student_answers,
-                save=True
+                save=True,
             )
         else:
             raise ValidationError("Submission has no associated resource (MockTest or Quiz).")
-        
-        # Update submission with snapshot, answers, and results
         submission.answers = student_answers
         submission.completed_at = timezone.now()
         submission.status = Submission.Status.GRADED
-        submission.score = Decimal(str(results['total_score']))
+        submission.score = Decimal(str(results["total_score"]))
         submission.results = results
-        submission.snapshot = snapshot_data  # Save snapshot for historical integrity
+        submission.snapshot = snapshot_data
         submission.save(update_fields=[
-            'answers', 'completed_at', 'status', 'score', 'results', 'snapshot'
+            "answers", "completed_at", "status", "score", "results", "snapshot",
         ])
-        
         return results
     
     @staticmethod
@@ -400,41 +385,35 @@ class GradingService:
             section_scores[section_id]['score'] += question_score
             section_scores[section_id]['max_score'] += Decimal(str(question.score))
             
-            # Store question result
+            # Store question result (no correct_index / is_correct leak; student sees only correct bool + score)
             section_question_results[section_id][question_id_str] = {
                 'correct': is_correct,
                 'score': float(question_score),
                 'selected_index': selected_index,
-                'correct_index': question.correct_option_index
             }
         
-        # Calculate total score
-        total_score = sum(s['score'] for s in section_scores.values())
-        
-        # Build results structure
+        total_score = sum(s["score"] for s in section_scores.values())
         results = {
-            'total_score': float(total_score),
-            'sections': {},
-            'jlpt_result': GradingService._calculate_jlpt_result(
+            "total_score": float(total_score),
+            "sections": {},
+            "jlpt_result": GradingService._calculate_jlpt_result(
                 mock_test.level,
                 total_score,
-                section_scores
+                section_scores,
             ),
-            'resource_type': 'mock_test'
+            "resource_type": "mock_test",
         }
         
-        # Add section details
         for section_id, section_data in section_scores.items():
-            section = section_data['section']
-            results['sections'][section_id] = {
-                'section_id': section_id,
-                'section_name': section.name,
-                'section_type': section.section_type,
-                'score': float(section_data['score']),
-                'max_score': float(section_data['max_score']),
-                'questions': section_question_results.get(section_id, {})
+            section = section_data["section"]
+            results["sections"][section_id] = {
+                "section_id": section_id,
+                "section_name": section.name,
+                "section_type": section.section_type,
+                "score": float(section_data["score"]),
+                "max_score": float(section_data["max_score"]),
+                "questions": section_question_results.get(section_id, {}),
             }
-        
         return results
     
     @staticmethod
@@ -486,26 +465,24 @@ class GradingService:
             if is_correct:
                 correct_count += 1
             
-            # Store question result
+            # Store question result (no correct_index leak)
             question_results[question_id_str] = {
                 'correct': is_correct,
                 'score': float(question_score),
                 'points': question.points,
                 'selected_index': selected_index,
-                'correct_index': question.correct_option_index
             }
         
-        # Build results structure
+        percentage = (total_score / max_score * Decimal("100")).quantize(Decimal("0.01")) if max_score > 0 else Decimal("0.00")
         results = {
-            'total_score': float(total_score),
-            'max_score': float(max_score),
-            'correct_count': correct_count,
-            'total_count': total_count,
-            'percentage': float(total_score / max_score * 100) if max_score > 0 else 0.0,
-            'questions': question_results,
-            'resource_type': 'quiz'
+            "total_score": float(total_score),
+            "max_score": float(max_score),
+            "correct_count": correct_count,
+            "total_count": total_count,
+            "percentage": float(percentage),
+            "questions": question_results,
+            "resource_type": "quiz",
         }
-        
         return results
     
     @staticmethod
@@ -547,16 +524,18 @@ class GradingService:
     @staticmethod
     def create_snapshot(submission):
         """
-        Create a complete snapshot of the MockTest/Quiz at the time of grading.
+        Create a complete snapshot of the MockTest/Quiz at the exact moment of grading.
         
-        This snapshot includes ALL data including correct answers, preserving
-        the exact state of the test for historical integrity.
+        Saves the full structure (sections, groups, questions, options) including
+        correct_option_index and is_correct flags. If a teacher later deletes a question
+        or changes the correct answer, the student's historical result remains unchanged
+        because it was graded against this snapshot.
         
         Args:
-            submission: Submission instance
+            submission: Submission instance (must have mock_test, quiz, or exam_assignment.mock_test)
             
         Returns:
-            dict: Complete snapshot data with resource_type indicator
+            dict: Complete snapshot with resource_type and snapshot_created_at
         """
         from apps.attempts.serializers import (
             FullMockTestSnapshotSerializer,
@@ -592,135 +571,108 @@ class GradingService:
     @staticmethod
     def _calculate_jlpt_result(level, total_score, section_scores):
         """
-        Calculate JLPT pass/fail result based on level and scores.
+        JLPT pass/fail per official standards. FAIL if total below pass mark OR any
+        section below minimum. All calculations use Decimal to avoid float errors.
         
-        Args:
-            level: MockTest level (N1, N2, N3, N4, N5)
-            total_score: Total score achieved
-            section_scores: Dict of section_id -> section data
-            
-        Returns:
-            dict: JLPT result with pass/fail status
+        N1–N3: Three sections — Language Knowledge, Reading, Listening (each min 19).
+        N4–N5: Two sections — Language Knowledge + Reading combined (120 pts, min 38),
+               Listening (60 pts, min 19).
         """
         if level not in GradingService.JLPT_PASS_REQUIREMENTS:
+            total_float = float(total_score) if isinstance(total_score, Decimal) else total_score
             return {
-                'level': level,
-                'total_score': float(total_score),
-                'pass_mark': None,
-                'passed': None,
-                'section_results': {},
-                'error': f'Unknown JLPT level: {level}'
+                "level": level,
+                "total_score": total_float,
+                "pass_mark": None,
+                "passed": None,
+                "section_results": {},
+                "error": f"Unknown JLPT level: {level}",
             }
-        
         requirements = GradingService.JLPT_PASS_REQUIREMENTS[level]
-        total_pass_mark = requirements['total_pass']
-        
-        # Group sections by JLPT scoring categories
+        total_pass_mark = requirements["total_pass"]
+        total_score_d = total_score if isinstance(total_score, Decimal) else Decimal(str(total_score))
+
         section_results = {}
         all_sections_passed = True
-        
-        if level in ['N1', 'N2', 'N3']:
-            # Three separate sections: Language Knowledge, Reading, Listening
-            # Each section max 60, total 180
-            language_knowledge_score = Decimal('0.00')
-            reading_score = Decimal('0.00')
-            listening_score = Decimal('0.00')
-            
-            for section_id, section_data in section_scores.items():
-                section = section_data['section']
-                score = section_data['score']
-                
+
+        if level in ("N1", "N2", "N3"):
+            lang_score = Decimal("0.00")
+            reading_score = Decimal("0.00")
+            listening_score = Decimal("0.00")
+            for _sid, section_data in section_scores.items():
+                section = section_data["section"]
+                score = section_data["score"]
+                if not isinstance(score, Decimal):
+                    score = Decimal(str(score))
                 if section.section_type == TestSection.SectionType.VOCAB:
-                    # Vocabulary contributes to Language Knowledge
-                    language_knowledge_score += score
+                    lang_score += score
                 elif section.section_type == TestSection.SectionType.GRAMMAR_READING:
-                    # Grammar/Reading section: Grammar part -> Language Knowledge, Reading part -> Reading
-                    # For simplicity, split 50/50, but in real JLPT, this would be based on question distribution
-                    # In practice, you might want to track this more precisely based on question types
-                    language_knowledge_score += score * Decimal('0.5')
-                    reading_score += score * Decimal('0.5')
+                    half = score * Decimal("0.5")
+                    lang_score += half
+                    reading_score += half
                 elif section.section_type == TestSection.SectionType.FULL_WRITTEN:
-                    # N1/N2: Full Written section contains Vocab + Grammar + Reading
-                    # Split: Vocab+Grammar -> Language Knowledge, Reading -> Reading
-                    # Approximate split: 2/3 to Language Knowledge, 1/3 to Reading
-                    language_knowledge_score += score * Decimal('0.67')
-                    reading_score += score * Decimal('0.33')
+                    lang_score += score * Decimal("0.67")
+                    reading_score += score * Decimal("0.33")
                 elif section.section_type == TestSection.SectionType.LISTENING:
                     listening_score += score
-            
-            # Check pass requirements
-            lang_min = requirements['sections']['language_knowledge']
-            reading_min = requirements['sections']['reading']
-            listening_min = requirements['sections']['listening']
-            
+            lang_min = Decimal(str(requirements["sections"]["language_knowledge"]))
+            reading_min = Decimal(str(requirements["sections"]["reading"]))
+            listening_min = Decimal(str(requirements["sections"]["listening"]))
             section_results = {
-                'language_knowledge': {
-                    'score': float(language_knowledge_score),
-                    'min_required': lang_min,
-                    'passed': float(language_knowledge_score) >= lang_min
+                "language_knowledge": {
+                    "score": float(lang_score),
+                    "min_required": int(lang_min),
+                    "passed": lang_score >= lang_min,
                 },
-                'reading': {
-                    'score': float(reading_score),
-                    'min_required': reading_min,
-                    'passed': float(reading_score) >= reading_min
+                "reading": {
+                    "score": float(reading_score),
+                    "min_required": int(reading_min),
+                    "passed": reading_score >= reading_min,
                 },
-                'listening': {
-                    'score': float(listening_score),
-                    'min_required': listening_min,
-                    'passed': float(listening_score) >= listening_min
-                }
+                "listening": {
+                    "score": float(listening_score),
+                    "min_required": int(listening_min),
+                    "passed": listening_score >= listening_min,
+                },
             }
-            
-            all_sections_passed = all(
-                sr['passed'] for sr in section_results.values()
-            )
-        
-        elif level in ['N4', 'N5']:
-            # Two sections: Language Knowledge + Reading (combined), Listening
-            language_reading_score = Decimal('0.00')
-            listening_score = Decimal('0.00')
-            
-            for section_id, section_data in section_scores.items():
-                section = section_data['section']
-                score = section_data['score']
-                
+            all_sections_passed = all(sr["passed"] for sr in section_results.values())
+
+        elif level in ("N4", "N5"):
+            lang_reading_score = Decimal("0.00")
+            listening_score = Decimal("0.00")
+            for _sid, section_data in section_scores.items():
+                section = section_data["section"]
+                score = section_data["score"]
+                if not isinstance(score, Decimal):
+                    score = Decimal(str(score))
                 if section.section_type == TestSection.SectionType.LISTENING:
                     listening_score += score
                 else:
-                    # All other sections contribute to Language + Reading combined
-                    language_reading_score += score
-            
-            # Check pass requirements
-            lang_read_min = requirements['sections']['language_reading_combined']
-            listening_min = requirements['sections']['listening']
-            
+                    lang_reading_score += score
+            lang_read_min = Decimal(str(requirements["sections"]["language_reading_combined"]))
+            listening_min = Decimal(str(requirements["sections"]["listening"]))
             section_results = {
-                'language_reading_combined': {
-                    'score': float(language_reading_score),
-                    'min_required': lang_read_min,
-                    'passed': float(language_reading_score) >= lang_read_min
+                "language_reading_combined": {
+                    "score": float(lang_reading_score),
+                    "min_required": int(lang_read_min),
+                    "passed": lang_reading_score >= lang_read_min,
                 },
-                'listening': {
-                    'score': float(listening_score),
-                    'min_required': listening_min,
-                    'passed': float(listening_score) >= listening_min
-                }
+                "listening": {
+                    "score": float(listening_score),
+                    "min_required": int(listening_min),
+                    "passed": listening_score >= listening_min,
+                },
             }
-            
-            all_sections_passed = all(
-                sr['passed'] for sr in section_results.values()
-            )
-        
-        # Final pass/fail determination
-        total_passed = float(total_score) >= total_pass_mark
+            all_sections_passed = all(sr["passed"] for sr in section_results.values())
+
+        total_passed = total_score_d >= Decimal(str(total_pass_mark))
         passed = total_passed and all_sections_passed
-        
         return {
-            'level': level,
-            'total_score': float(total_score),
-            'pass_mark': total_pass_mark,
-            'passed': passed,
-            'section_results': section_results,
-            'total_passed': total_passed,
-            'all_sections_passed': all_sections_passed
+            "level": level,
+            "total_score": float(total_score_d),
+            "pass_mark": int(total_pass_mark),
+            "passed": passed,
+            "section_results": section_results,
+            "total_passed": total_passed,
+            "all_sections_passed": all_sections_passed,
         }

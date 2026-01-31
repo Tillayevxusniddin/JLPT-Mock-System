@@ -1,33 +1,15 @@
 # apps/mock_tests/serializers.py
+"""
+Mock tests serializers. Published-protection logic (validate_mock_test_editable,
+validate_child_object_editable) is applied in validate() and documented in
+apps.mock_tests.swagger. correct_option_index is auto-calculated from options.
+"""
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import (
-    MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
-)
+
+from .models import MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
 from .services import validate_mock_test_editable, validate_child_object_editable
-
-
-class UserSummarySerializer(serializers.Serializer):
-    """Serializer for user summary information (cross-schema)."""
-    id = serializers.IntegerField()
-    full_name = serializers.CharField()
-    email = serializers.EmailField(required=False)
-
-    @staticmethod
-    def from_user(user):
-        """Create a user summary from a User instance."""
-        if not user:
-            return None
-        full_name = ""
-        if getattr(user, "first_name", None) or getattr(user, "last_name", None):
-            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        if not full_name:
-            full_name = getattr(user, "email", None) or getattr(user, "username", None) or str(user.id)
-        return {
-            "id": user.id,
-            "full_name": full_name.strip(),
-            "email": getattr(user, "email", None) or ""
-        }
+from apps.core.serializers import UserSummarySerializer
 
 
 class QuestionSerializer(serializers.ModelSerializer):
@@ -189,92 +171,21 @@ class MockTestSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at", "created_by", "sections"]
 
     def get_created_by(self, obj):
-        """Get user information from public schema."""
+        """Get user from user_map (no schema switch); created_by_id is stored as user.id (int)."""
         if not obj.created_by_id:
             return None
-        
-        user_map = self.context.get('user_map')
+        user_map = self.context.get("user_map")
         if user_map is not None:
-            # Try to find user in the map
-            # Note: created_by_id is UUIDField but User.id is BigAutoField
-            # We need to handle this conversion
-            user = None
-            try:
-                created_by_id = obj.created_by_id
-                
-                # Try direct lookup
-                user = user_map.get(created_by_id)
-                
-                # Try converting UUID to int if possible
-                if not user and hasattr(created_by_id, '__int__'):
-                    try:
-                        created_by_int = int(created_by_id)
-                        user = user_map.get(created_by_int)
-                    except (ValueError, OverflowError):
-                        pass
-                
-                # Try UUID conversion from int
-                if not user:
-                    import uuid
-                    try:
-                        # If created_by_id is a UUID created from user.id
-                        # Try to extract the int value
-                        if isinstance(created_by_id, uuid.UUID):
-                            user_id_from_uuid = created_by_id.int
-                            user = user_map.get(user_id_from_uuid)
-                    except (ValueError, AttributeError):
-                        pass
-                
-                # Try string comparison
-                if not user:
-                    for uid, u in user_map.items():
-                        if str(uid) == str(created_by_id):
-                            user = u
-                            break
-            except (ValueError, TypeError, AttributeError):
-                pass
-            
+            uid = obj.created_by_id
+            if hasattr(uid, "__int__"):
+                try:
+                    uid = int(uid)
+                except (ValueError, OverflowError):
+                    pass
+            user = user_map.get(uid)
             if user:
                 return UserSummarySerializer.from_user(user)
-        
-        # Fallback: fetch from public schema
-        from apps.core.tenant_utils import with_public_schema
-        from apps.authentication.models import User
-        import uuid
-        
-        def fetch_user():
-            try:
-                created_by_id = obj.created_by_id
-                
-                # Try direct lookup
-                user = User.objects.filter(id=created_by_id).first()
-                if user:
-                    return user
-                
-                # Try converting UUID to int
-                if hasattr(created_by_id, '__int__'):
-                    try:
-                        user_id = int(created_by_id)
-                        user = User.objects.filter(id=user_id).first()
-                        if user:
-                            return user
-                    except (ValueError, OverflowError):
-                        pass
-                
-                # Try extracting int from UUID
-                if isinstance(created_by_id, uuid.UUID):
-                    try:
-                        user_id = created_by_id.int
-                        return User.objects.filter(id=user_id).first()
-                    except (ValueError, OverflowError):
-                        pass
-                
-                return None
-            except (ValueError, TypeError, AttributeError):
-                return None
-        
-        user = with_public_schema(fetch_user)
-        return UserSummarySerializer.from_user(user)
+        return UserSummarySerializer.from_user(obj.created_by) if getattr(obj, "created_by", None) else None
 
     def validate(self, attrs):
         """Validate the entire object, including published status check."""

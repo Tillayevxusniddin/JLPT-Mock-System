@@ -1,13 +1,21 @@
-#apps/materials/views.py
+# apps/materials/views.py
+"""
+Materials app API views. All OpenAPI schemas, multipart/form-data definitions,
+MIME/extension rules, and visibility docs are in apps.materials.swagger; views
+are thin and only apply decorators from that module.
+"""
 from django.db.models import Q
-from rest_framework import viewsets, permissions, filters, status
+from rest_framework import viewsets, permissions, filters
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Material
 from .serializers import MaterialSerializer
 from .permissions import IsAdminOrTeacher, IsMaterialOwnerOrCenterAdmin
+from .swagger import material_viewset_schema
 
+
+@material_viewset_schema
 class MaterialViewSet(viewsets.ModelViewSet):
     serializer_class = MaterialSerializer
     queryset = Material.objects.all().order_by("-created_at")
@@ -55,9 +63,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         return Material.objects.none()
 
     def list(self, request, *args, **kwargs):
-        """
-        Optimized list endpoint to fix N+1 schema switching for 'created_by' field.
-        """
+        # created_by is batch-fetched from public schema (user_map); see swagger MATERIALS_LIST_DESCRIPTION.
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         

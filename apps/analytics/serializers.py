@@ -1,4 +1,8 @@
-#apps/analytics/serializers.py
+# apps/analytics/serializers.py
+"""
+Analytics serializers for role-based dashboards. Frontend-ready keys for charts and tables.
+Optional growth_* fields for future time-series. Documented in apps/analytics/swagger.py.
+"""
 from rest_framework import serializers
 
 
@@ -14,7 +18,7 @@ class UpcomingDeadlineSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     title = serializers.CharField()
     deadline = serializers.DateTimeField()
-    type = serializers.CharField()  # "Exam" or "Homework"
+    type = serializers.CharField()
 
 
 class SkillPerformanceSerializer(serializers.Serializer):
@@ -30,11 +34,21 @@ class RecentResultSerializer(serializers.Serializer):
     completed_at = serializers.DateTimeField(allow_null=True)
 
 
+class ContactRequestItemSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    center_name = serializers.CharField()
+    full_name = serializers.CharField()
+    phone_number = serializers.CharField()
+    status = serializers.CharField()
+    created_at = serializers.DateTimeField()
+
+
 class OwnerAnalyticsSerializer(serializers.Serializer):
     total_centers = serializers.IntegerField()
     total_users = serializers.IntegerField()
     active_centers_count = serializers.IntegerField()
-    recent_contact_requests = serializers.ListField(child=serializers.DictField())
+    recent_contact_requests = ContactRequestItemSerializer(many=True)
+    growth_centers_pct = serializers.FloatField(allow_null=True, required=False)
 
 
 class CenterAdminAnalyticsSerializer(serializers.Serializer):
@@ -42,6 +56,7 @@ class CenterAdminAnalyticsSerializer(serializers.Serializer):
     total_teachers = serializers.IntegerField()
     total_groups = serializers.IntegerField()
     active_exams_count = serializers.IntegerField()
+    growth_students_pct = serializers.FloatField(allow_null=True, required=False)
 
 
 class TeacherAnalyticsSerializer(serializers.Serializer):
@@ -49,6 +64,7 @@ class TeacherAnalyticsSerializer(serializers.Serializer):
     total_students = serializers.IntegerField()
     pending_grading_count = serializers.IntegerField()
     recent_submissions = RecentSubmissionSerializer(many=True)
+    submission_trend_count = serializers.IntegerField(allow_null=True, required=False)
 
 
 class StudentAnalyticsSerializer(serializers.Serializer):
@@ -57,4 +73,4 @@ class StudentAnalyticsSerializer(serializers.Serializer):
     upcoming_deadlines = UpcomingDeadlineSerializer(many=True)
     recent_results = RecentResultSerializer(many=True)
     skill_performance = SkillPerformanceSerializer(many=True)
-
+    submission_trend_count = serializers.IntegerField(allow_null=True, required=False)

@@ -4,9 +4,51 @@ Mock Tests Models - JLPT Mock Test System
 Structure: MockTest -> TestSection -> QuestionGroup (Mondai) -> Question -> Choice
 """
 from django.db import models
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from apps.core.models import TenantBaseModel
+from apps.core.tenant_utils import get_current_schema
+from config.storage import PrivateMediaStorage
+
+
+def _tenant_media_path(subpath, filename):
+    """Tenant-isolated upload path for mock test media (same pattern as materials app)."""
+    from apps.core.tenant_utils import with_public_schema
+    from apps.centers.models import Center
+
+    schema_name = get_current_schema() or "public"
+    if schema_name == "public":
+        return f"mock_tests/{subpath}/{filename}"
+    try:
+        center = with_public_schema(
+            lambda: Center.objects.filter(schema_name=schema_name).first()
+        )
+        if center is not None:
+            return f"tenants/{center.id}/mock_tests/{subpath}/{filename}"
+    except Exception:
+        pass
+    return f"tenants/{schema_name}/mock_tests/{subpath}/{filename}"
+
+
+def tenant_listening_audio_path(instance, filename):
+    return _tenant_media_path("listening_audios", filename)
+
+
+def tenant_group_image_path(instance, filename):
+    return _tenant_media_path("group_images", filename)
+
+
+def tenant_question_audio_path(instance, filename):
+    return _tenant_media_path("question_audios", filename)
+
+
+def tenant_question_image_path(instance, filename):
+    return _tenant_media_path("question_images", filename)
+
+
+def tenant_quiz_image_path(instance, filename):
+    return _tenant_media_path("quiz_images", filename)
 
 class MockTest(TenantBaseModel):
     class Level(models.TextChoices):
@@ -23,7 +65,7 @@ class MockTest(TenantBaseModel):
     title = models.CharField(max_length=255)
     level = models.CharField(max_length=2, choices=Level.choices, db_index=True)
     description = models.TextField(blank=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
     created_by_id = models.BigIntegerField(null=True, blank=True)
     pass_score = models.PositiveIntegerField(default=90)
     total_score = models.PositiveIntegerField(default=180)
@@ -71,9 +113,9 @@ class QuestionGroup(TenantBaseModel):
     instruction = models.TextField(blank=True)
     
     # Shared Content (Matn yoki Audio)
-    reading_text = models.TextField(blank=True, null=True) # Reading uchun matn
-    audio_file = models.FileField(upload_to='listening_audios/', blank=True, null=True) # Listening uchun
-    image = models.ImageField(upload_to='group_images/', blank=True, null=True) # Diagramma
+    reading_text = models.TextField(blank=True, null=True)  # Reading uchun matn
+    audio_file = models.FileField(upload_to=tenant_listening_audio_path, storage=PrivateMediaStorage(), blank=True, null=True)  # Listening
+    image = models.ImageField(upload_to=tenant_group_image_path, storage=PrivateMediaStorage(), blank=True, null=True)  # Diagram
     
     order = models.PositiveIntegerField(default=1)
 
@@ -88,8 +130,8 @@ class Question(TenantBaseModel):
     group = models.ForeignKey(QuestionGroup, on_delete=models.CASCADE, related_name='questions')
     text = models.TextField(blank=True)
     question_number = models.PositiveIntegerField(default=1)
-    image = models.ImageField(upload_to='question_images/', blank=True, null=True)
-    audio_file = models.FileField(upload_to='question_audios/', blank=True, null=True)
+    image = models.ImageField(upload_to=tenant_question_image_path, storage=PrivateMediaStorage(), blank=True, null=True)
+    audio_file = models.FileField(upload_to=tenant_question_audio_path, storage=PrivateMediaStorage(), blank=True, null=True)
     score = models.PositiveIntegerField(default=1)
     order = models.PositiveIntegerField(default=1)
     options = models.JSONField(default=list, help_text="List of options with is_correct flag")
@@ -150,7 +192,7 @@ class QuizQuestion(TenantBaseModel):
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
     text = models.CharField(max_length=500)
     question_type = models.CharField(max_length=20, choices=QuestionType.choices, default=QuestionType.QUIZ)
-    image = models.ImageField(upload_to='quiz_images/', blank=True, null=True)
+    image = models.ImageField(upload_to=tenant_quiz_image_path, storage=PrivateMediaStorage(), blank=True, null=True)
     duration = models.PositiveIntegerField(default=20)
     points = models.PositiveIntegerField(default=1)
     order = models.PositiveIntegerField(default=1)

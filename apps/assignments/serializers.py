@@ -1,33 +1,15 @@
 # apps/assignments/serializers.py
+"""
+Assignments serializers. Visibility, validation rules, and student status
+(Not Started / In Progress / Completed) are documented in apps/assignments/swagger.py.
+"""
 
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import ExamAssignment, HomeworkAssignment
 from .services import validate_assignment_payload, validate_user_ids_belong_to_tenant
 from apps.groups.models import Group
-
-
-class UserSummarySerializer(serializers.Serializer):
-    """Serializer for user summary information (cross-schema)."""
-    id = serializers.IntegerField()
-    full_name = serializers.CharField()
-    email = serializers.EmailField(required=False)
-
-    @staticmethod
-    def from_user(user):
-        """Create a user summary from a User instance."""
-        if not user:
-            return None
-        full_name = ""
-        if getattr(user, "first_name", None) or getattr(user, "last_name", None):
-            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        if not full_name:
-            full_name = getattr(user, "email", None) or getattr(user, "username", None) or str(user.id)
-        return {
-            "id": user.id,
-            "full_name": full_name.strip(),
-            "email": getattr(user, "email", None) or ""
-        }
+from apps.core.serializers import UserSummarySerializer
 
 
 class GroupSummarySerializer(serializers.ModelSerializer):
@@ -41,61 +23,50 @@ class GroupSummarySerializer(serializers.ModelSerializer):
 class ExamAssignmentSerializer(serializers.ModelSerializer):
     """Serializer for ExamAssignment model."""
     mock_test = serializers.PrimaryKeyRelatedField(
-        queryset=None,  # Will be set in __init__
+        queryset=None,  # Set in __init__
         required=True,
-        help_text="MockTest instance (must be PUBLISHED)"
+        help_text="MockTest (must be PUBLISHED)",
     )
     assigned_group_ids = serializers.ListField(
         child=serializers.UUIDField(),
         write_only=True,
         required=False,
         allow_empty=True,
-        help_text="List of Group UUIDs to assign this exam to"
+        help_text="List of Group UUIDs to assign this exam to",
     )
     assigned_groups = GroupSummarySerializer(many=True, read_only=True)
     created_by = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = ExamAssignment
         fields = [
             "id", "title", "description", "mock_test", "status",
             "estimated_start_time", "is_published", "assigned_group_ids",
             "assigned_groups", "created_by_id", "created_by",
-            "created_at", "updated_at"
+            "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "created_at", "updated_at", "created_by", "assigned_groups"
+            "id", "created_at", "updated_at", "created_by", "assigned_groups",
         ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Set queryset for mock_test field
         from apps.mock_tests.models import MockTest
-        self.fields['mock_test'].queryset = MockTest.objects.filter(
+        self.fields["mock_test"].queryset = MockTest.objects.filter(
             status=MockTest.Status.PUBLISHED,
-            deleted_at__isnull=True
+            deleted_at__isnull=True,
         )
 
     def get_created_by(self, obj):
-        """Get user information from public schema."""
+        """Get user from user_map (no schema switch in serializer loop)."""
         if not obj.created_by_id:
             return None
-        
-        user_map = self.context.get('user_map')
+        user_map = self.context.get("user_map")
         if user_map is not None:
             user = user_map.get(obj.created_by_id)
             if user:
                 return UserSummarySerializer.from_user(user)
-        
-        # Fallback: fetch from public schema
-        from apps.core.tenant_utils import with_public_schema
-        from apps.authentication.models import User
-        
-        def fetch_user():
-            return User.objects.filter(id=obj.created_by_id).first()
-        
-        user = with_public_schema(fetch_user)
-        return UserSummarySerializer.from_user(user)
+        return None
 
     def validate(self, attrs):
         """Validate the entire object using service function."""
@@ -208,25 +179,15 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
         ]
 
     def get_created_by(self, obj):
-        """Get user information from public schema."""
+        """Get user from user_map (no schema switch in serializer loop)."""
         if not obj.created_by_id:
             return None
-        
-        user_map = self.context.get('user_map')
+        user_map = self.context.get("user_map")
         if user_map is not None:
             user = user_map.get(obj.created_by_id)
             if user:
                 return UserSummarySerializer.from_user(user)
-        
-        # Fallback: fetch from public schema
-        from apps.core.tenant_utils import with_public_schema
-        from apps.authentication.models import User
-        
-        def fetch_user():
-            return User.objects.filter(id=obj.created_by_id).first()
-        
-        user = with_public_schema(fetch_user)
-        return UserSummarySerializer.from_user(user)
+        return None
 
     def validate(self, attrs):
         """Validate the entire object."""
@@ -299,14 +260,14 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
                 "detail": "At least one group or one user must be assigned."
             })
         
-        # Get tenant center_id from request context
-        request = self.context.get('request')
-        tenant_center_id = None
-        if request and hasattr(request, 'user') and request.user:
-            tenant_center_id = request.user.center_id
-        
-        # Validate users belong to tenant
-        if user_ids and tenant_center_id:
+        # Validate users belong to current center (strict: with_public_schema in service)
+        request = self.context.get("request")
+        tenant_center_id = getattr(request.user, "center_id", None) if request and getattr(request, "user", None) else None
+        if user_ids:
+            if not tenant_center_id:
+                raise serializers.ValidationError({
+                    "assigned_user_ids": "Center context required to assign users."
+                })
             try:
                 validate_user_ids_belong_to_tenant(user_ids, tenant_center_id)
             except DjangoValidationError as e:
@@ -363,90 +324,98 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
         return assignment
 
 
+def _submission_status_display(submission_status):
+    """Map Submission.Status to student-facing status."""
+    from apps.attempts.models import Submission
+    if not submission_status:
+        return "Not Started"
+    if submission_status == Submission.Status.GRADED:
+        return "Completed"
+    if submission_status in (Submission.Status.STARTED, Submission.Status.SUBMITTED):
+        return "In Progress"
+    return "Not Started"
+
+
+def _get_submissions_map_for_homework(homework, user_id):
+    """
+    Single batch query: all submissions for this homework and user.
+    Returns {"mock_test": {mock_test_id: status}, "quiz": {quiz_id: status}}.
+    """
+    if not user_id:
+        return {"mock_test": {}, "quiz": {}}
+    from apps.attempts.models import Submission
+    subs = Submission.objects.filter(
+        homework_assignment=homework,
+        user_id=user_id,
+    ).values("mock_test_id", "quiz_id", "status")
+    by_mock_test = {}
+    by_quiz = {}
+    for s in subs:
+        if s["mock_test_id"]:
+            by_mock_test[s["mock_test_id"]] = s["status"]
+        if s["quiz_id"]:
+            by_quiz[s["quiz_id"]] = s["status"]
+    return {"mock_test": by_mock_test, "quiz": by_quiz}
+
+
 class HomeworkDetailSerializer(serializers.ModelSerializer):
     """
-    Detailed serializer for HomeworkAssignment (student view).
-    
-    Shows all MockTests and Quizzes with their individual completion status.
+    Detail serializer for HomeworkAssignment (retrieve). Shows each assigned
+    MockTest/Quiz with **Student's Current Status**: Not Started, In Progress, Completed
+    (from attempts.Submission). One batch query for submissions (zero N+1).
     """
     mock_tests = serializers.SerializerMethodField()
     quizzes = serializers.SerializerMethodField()
     assigned_groups = GroupSummarySerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = HomeworkAssignment
         fields = [
             "id", "title", "description", "deadline",
             "mock_tests", "quizzes", "assigned_groups",
-            "show_results_immediately", "created_at", "updated_at"
+            "show_results_immediately", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-    
+
+    def to_representation(self, instance):
+        request = self.context.get("request")
+        user_id = request.user.id if request and getattr(request, "user", None) else None
+        self._submissions_map = _get_submissions_map_for_homework(instance, user_id)
+        return super().to_representation(instance)
+
     def get_mock_tests(self, obj):
-        """Get MockTests with completion status."""
-        from apps.attempts.models import Submission
-        
-        user = self.context.get('request').user if self.context.get('request') else None
-        if not user:
-            return []
-        
-        mock_tests_data = []
-        for mt in obj.mock_tests.all():
-            # Check submission status
-            submission = Submission.objects.filter(
-                user_id=user.id,
-                homework_assignment=obj,
-                mock_test=mt
-            ).first()
-            
-            status = "Not Started"
-            if submission:
-                if submission.status == Submission.Status.GRADED:
-                    status = "Completed"
-                elif submission.status in [Submission.Status.STARTED, Submission.Status.SUBMITTED]:
-                    status = "In Progress"
-            
-            mock_tests_data.append({
+        subs_map = getattr(self, "_submissions_map", None)
+        if subs_map is None:
+            request = self.context.get("request")
+            user_id = request.user.id if request and getattr(request, "user", None) else None
+            subs_map = _get_submissions_map_for_homework(obj, user_id)
+        by_mt = subs_map.get("mock_test", {})
+        return [
+            {
                 "id": str(mt.id),
                 "title": mt.title,
                 "level": mt.level,
-                "description": mt.description,
-                "status": status,
-                "type": "mock_test"
-            })
-        
-        return mock_tests_data
-    
+                "description": getattr(mt, "description", "") or "",
+                "status": _submission_status_display(by_mt.get(mt.id)),
+                "type": "mock_test",
+            }
+            for mt in obj.mock_tests.all()
+        ]
+
     def get_quizzes(self, obj):
-        """Get Quizzes with completion status."""
-        from apps.attempts.models import Submission
-        
-        user = self.context.get('request').user if self.context.get('request') else None
-        if not user:
-            return []
-        
-        quizzes_data = []
-        for q in obj.quizzes.all():
-            # Check submission status
-            submission = Submission.objects.filter(
-                user_id=user.id,
-                homework_assignment=obj,
-                quiz=q
-            ).first()
-            
-            status = "Not Started"
-            if submission:
-                if submission.status == Submission.Status.GRADED:
-                    status = "Completed"
-                elif submission.status in [Submission.Status.STARTED, Submission.Status.SUBMITTED]:
-                    status = "In Progress"
-            
-            quizzes_data.append({
+        subs_map = getattr(self, "_submissions_map", None)
+        if subs_map is None:
+            request = self.context.get("request")
+            user_id = request.user.id if request and getattr(request, "user", None) else None
+            subs_map = _get_submissions_map_for_homework(obj, user_id)
+        by_quiz = subs_map.get("quiz", {})
+        return [
+            {
                 "id": str(q.id),
                 "title": q.title,
-                "description": q.description,
-                "status": status,
-                "type": "quiz"
-            })
-        
-        return quizzes_data
+                "description": q.description or "",
+                "status": _submission_status_display(by_quiz.get(q.id)),
+                "type": "quiz",
+            }
+            for q in obj.quizzes.all()
+        ]

@@ -1,0 +1,32 @@
+[Unit]
+Description=JLPT Daphne ASGI (mikan.uz WebSockets)
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/mikan
+Environment="PATH=/var/www/mikan/venv/bin"
+EnvironmentFile=/var/www/mikan/.env
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+ExecStart=/var/www/mikan/venv/bin/daphne \
+    --bind 127.0.0.1 \
+    --port 8001 \
+    --proxy-headers \
+    --verbosity 1 \
+    config.asgi:application
+ExecStop=/bin/kill -TERM $MAINPID
+KillSignal=SIGTERM
+KillMode=mixed
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jlpt-daphne
+
+[Install]
+WantedBy=multi-user.target

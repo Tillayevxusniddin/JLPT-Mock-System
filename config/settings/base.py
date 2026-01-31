@@ -35,7 +35,7 @@ SHARED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django.contrib.postgres'
+    'django.contrib.postgres',
 
     # third party apps
     "rest_framework",
@@ -52,7 +52,6 @@ SHARED_APPS = [
     "apps.authentication",
     "apps.centers",
     "apps.invitations",
-    "apps.notifications",
 
 ]
 
@@ -62,14 +61,14 @@ TENANT_APPS = [
     "django.contrib.auth",
 
     # Business logic apps (TENANT schema - isolated per organizations)
-
     "apps.groups",
     "apps.materials",
-    "apps.mock_tests",
+    "apps.mock_tests.apps.MockTestsConfig",
     "apps.assignments",
     "apps.attempts",
+    "apps.notifications",
     "apps.chat",
-    "apps.analytics"
+    "apps.analytics",
 ]
 
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
@@ -189,8 +188,8 @@ if USE_S3:
     # VDS: https://storage.vdsina.ru or your VDS endpoint
     AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default=None)
     
-    # Custom domain (optional - for CDN)
-    # Leave empty for direct S3 URLs
+    # Custom domain (optional - for CDN). When set, static/media URLs use this domain.
+    # Ensure bucket CORS allows origins: api.mikan.uz, *.mikan.uz (or list each subdomain).
     AWS_S3_CUSTOM_DOMAIN = env("AWS_S3_CUSTOM_DOMAIN", default=None)
     
     # Security & Performance

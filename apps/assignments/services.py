@@ -99,31 +99,33 @@ def validate_assignment_payload(mock_test, group_ids=None, user_ids=None):
 
 def validate_user_ids_belong_to_tenant(user_ids, tenant_center_id):
     """
-    Validate that user_ids belong to the current tenant (Center).
-    
-    Args:
-        user_ids: List of user IDs to validate
-        tenant_center_id: Center ID of the current tenant
-        
-    Raises:
-        ValidationError: If any user doesn't belong to the tenant
+    Validate that all user_ids exist in the **Public Schema** (User table) and
+    belong to the **Current Center** (User.center_id == tenant_center_id).
+    Raises ValidationError if any ID is missing or belongs to another center.
     """
     if not user_ids:
         return
-    
+    if not isinstance(user_ids, (list, tuple)):
+        raise ValidationError("assigned_user_ids must be a list of integers.")
+    user_ids = [int(uid) for uid in user_ids if uid is not None]
+    if not user_ids:
+        return
+
     from apps.core.tenant_utils import with_public_schema
     from apps.authentication.models import User
-    
-    def fetch_users():
-        return User.objects.filter(
-            id__in=user_ids,
-            center_id=tenant_center_id
-        ).values_list('id', flat=True)
-    
-    valid_user_ids = set(with_public_schema(fetch_users))
-    invalid_user_ids = set(user_ids) - valid_user_ids
-    
-    if invalid_user_ids:
+
+    def fetch_valid_ids():
+        return set(
+            User.objects.filter(
+                id__in=user_ids,
+                center_id=tenant_center_id,
+            )
+            .values_list("id", flat=True)
+        )
+
+    valid_ids = with_public_schema(fetch_valid_ids)
+    invalid_ids = set(user_ids) - valid_ids
+    if invalid_ids:
         raise ValidationError(
-            f"The following user IDs do not belong to this center: {list(invalid_user_ids)}"
+            f"The following user IDs do not belong to this center: {sorted(invalid_ids)}"
         )

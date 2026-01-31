@@ -1,9 +1,10 @@
 # apps/groups/views.py
 """
-Groups app API views. OpenAPI schemas live in apps.groups.swagger.
+Groups app API views. All OpenAPI schemas, examples, and tags are defined in
+apps.groups.swagger; views are thin and only apply decorators from that module.
 
-Cross-schema: Groups/memberships are in tenant schema; users in public schema.
-List view pre-fetches all teachers in one public-schema query (teacher_map).
+Cross-schema: Groups/memberships live in tenant schema; user details in public schema.
+List view batch-fetches all teachers from public schema (teacher_map) to avoid N+1.
 """
 from django.db import IntegrityError
 from django.db.models import Q
@@ -112,15 +113,8 @@ class GroupViewSet(viewsets.ModelViewSet):
         return Group.objects.none()
 
     def list(self, request, *args, **kwargs):
-        """
-        Optimized list endpoint with teacher pre-fetching.
-        
-        PERFORMANCE FIX: Instead of switching schema for every group (N+1 problem),
-        we fetch all teachers ONCE and pass them via serializer context.
-        
-        Before: 20 groups = 20 schema switches
-        After:  20 groups = 1 schema switch
-        """
+        # Teacher details are batch-fetched from public schema (teacher_map) and
+        # passed to GroupListSerializer context; see swagger GROUPS_LIST_DESCRIPTION.
         queryset = self.filter_queryset(self.get_queryset())
         
         # Paginate first

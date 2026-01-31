@@ -1,6 +1,7 @@
 # apps/centers/views.py
 """
-Centers app API views. OpenAPI schemas live in apps.centers.swagger.
+Centers app API views. All OpenAPI schemas, examples, and tags are defined in
+apps.centers.swagger; views are thin and only apply decorators from that module.
 """
 from django.db.models import Prefetch, Q, Count
 from django_filters import FilterSet

@@ -73,10 +73,14 @@ CORS_ALLOW_METHODS = [
     "HEAD",
 ]
 
-# Get CORS_ALLOWED_ORIGINS from environment, but ensure localhost is included for development
+# CORS: Set CORS_ALLOWED_ORIGINS in .env for production (comma-separated).
+# Include https://mikan.uz, https://api.mikan.uz, and each tenant subdomain
+# (e.g. https://edu1.mikan.uz). Wildcard *.mikan.uz is not supported; list origins explicitly.
 _cors_origins_from_env = env.list("CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOWED_ORIGINS = _cors_origins_from_env if _cors_origins_from_env else [
-    # Default development/frontend origins
+    "https://mikan.uz",
+    "https://www.mikan.uz",
+    "https://api.mikan.uz",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -199,7 +203,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 # Logging Configuration (JSON format for Loki)
 # ========================================
 
-from config.logging_config import JSONFormatter, RequestIDFilter
+from config.logging_config import JSONFormatter, RequestIDFilter, TenantSchemaFilter
 
 # Ensure logs directory exists
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
@@ -229,13 +233,16 @@ LOGGING = {
         "request_id": {
             "()": RequestIDFilter,
         },
+        "tenant_schema": {
+            "()": TenantSchemaFilter,
+        },
     },
     "handlers": {
         "console": {
             "level": "INFO",
             "class": "logging.StreamHandler",
             "formatter": "json",  # Use JSON for Loki
-            "filters": ["request_id"],
+            "filters": ["request_id", "tenant_schema"],
         },
         "file": {
             "level": "WARNING",
@@ -244,7 +251,7 @@ LOGGING = {
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 5,
             "formatter": "json",  # Use JSON for Loki
-            "filters": ["request_id"],
+            "filters": ["request_id", "tenant_schema"],
         },
         "error_file": {
             "level": "ERROR",
@@ -253,7 +260,7 @@ LOGGING = {
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 10,  # Keep more error logs
             "formatter": "json",
-            "filters": ["request_id"],
+            "filters": ["request_id", "tenant_schema"],
         },
         # "backup_file": {
         #     "level": "INFO",

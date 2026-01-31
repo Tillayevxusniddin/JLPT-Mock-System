@@ -1,7 +1,14 @@
 # apps/notifications/signals.py
+"""
+Notification triggers. All handlers run in tenant context (signals from tenant models).
+Every trigger uses transaction.on_commit() so the real-time push happens only after the
+DB transaction commits (atomic; no race where we notify before data is saved).
+Debounce: one notification per (user, type, related_id) via batch check before sending.
+Notification model lives in tenant schema; no with_public_schema needed here.
+"""
 import logging
 from django.apps import apps
-from django.db.models.signals import post_save, m2m_changed
+from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.db import transaction
 
@@ -20,49 +27,40 @@ def _get_notification_model():
 
 @receiver(post_save, sender=apps.get_model("assignments", "ExamAssignment"))
 def exam_assignment_opened_handler(sender, instance, created, **kwargs):
-    """
-    When an ExamAssignment is OPENED, notify all students in assigned groups.
-
-    Debounce: For each (user, exam) pair, only one EXAM_OPENED notification.
-    """
-    Notification = _get_notification_model()
-
-    # Only when status is OPEN
     if instance.status != instance.RoomStatus.OPEN:
         return
-
-    # Determine target users: students in assigned groups
+    Notification = _get_notification_model()
     GroupMembership = apps.get_model("groups", "GroupMembership")
     group_ids = list(instance.assigned_groups.values_list("id", flat=True))
-
     if not group_ids:
         return
-
-    student_user_ids = GroupMembership.objects.filter(
-        group_id__in=group_ids,
-        role_in_group="STUDENT",
-    ).values_list("user_id", flat=True)
-
-    student_user_ids = set(student_user_ids)
+    student_user_ids = set(
+        GroupMembership.objects.filter(
+            group_id__in=group_ids,
+            role_in_group="STUDENT",
+        ).values_list("user_id", flat=True)
+    )
+    if not student_user_ids:
+        return
+    exam_id = instance.id
+    title = instance.title
+    link = f"/exams/{instance.id}/"
 
     def _notify():
-        for user_id in student_user_ids:
-            # Debounce: skip if already notified for this exam
-            if Notification.objects.filter(
-                user_id=user_id,
+        already = set(
+            Notification.objects.filter(
+                user_id__in=student_user_ids,
                 notification_type=Notification.NotificationType.EXAM_OPENED,
-                related_task_id=instance.id,
-            ).exists():
-                continue
-
-            message = f"Exam '{instance.title}' is now open."
-            link = f"/exams/{instance.id}/"
+                related_task_id=exam_id,
+            ).values_list("user_id", flat=True)
+        )
+        for user_id in student_user_ids - already:
             NotificationService.send_notification(
                 user_id=user_id,
-                message=message,
+                message=f"Exam '{title}' is now open.",
                 type=Notification.NotificationType.EXAM_OPENED,
                 link=link,
-                related_ids={"task_id": instance.id},
+                related_ids={"task_id": exam_id},
             )
 
     transaction.on_commit(_notify)
@@ -74,48 +72,36 @@ def exam_assignment_opened_handler(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=apps.get_model("assignments", "HomeworkAssignment"))
 def homework_assigned_handler(sender, instance, created, **kwargs):
-    """
-    Notify students when homework is assigned.
-
-    Trigger: post_save on HomeworkAssignment.
-    - Uses assigned_groups and assigned_user_ids.
-    - Debounced per (user, homework) pair via TASK_ASSIGNED + related_task_id.
-    """
     Notification = _get_notification_model()
     GroupMembership = apps.get_model("groups", "GroupMembership")
-
-    # Target users from groups
     group_ids = list(instance.assigned_groups.values_list("id", flat=True))
     group_student_ids = GroupMembership.objects.filter(
         group_id__in=group_ids,
         role_in_group="STUDENT",
     ).values_list("user_id", flat=True)
-
-    # Target users explicitly assigned (ArrayField on HomeworkAssignment)
     explicit_user_ids = instance.assigned_user_ids or []
-
     target_user_ids = set(group_student_ids) | set(explicit_user_ids)
     if not target_user_ids:
         return
+    hw_id = instance.id
+    title = instance.title
+    link = f"/homeworks/{instance.id}/"
 
     def _notify():
-        for user_id in target_user_ids:
-            # Debounce: skip if we already have TASK_ASSIGNED for this homework
-            if Notification.objects.filter(
-                user_id=user_id,
+        already = set(
+            Notification.objects.filter(
+                user_id__in=target_user_ids,
                 notification_type=Notification.NotificationType.TASK_ASSIGNED,
-                related_task_id=instance.id,
-            ).exists():
-                continue
-
-            message = f"New homework '{instance.title}' has been assigned to you."
-            link = f"/homeworks/{instance.id}/"
+                related_task_id=hw_id,
+            ).values_list("user_id", flat=True)
+        )
+        for user_id in target_user_ids - already:
             NotificationService.send_notification(
                 user_id=user_id,
-                message=message,
+                message=f"New homework '{title}' has been assigned to you.",
                 type=Notification.NotificationType.TASK_ASSIGNED,
                 link=link,
-                related_ids={"task_id": instance.id},
+                related_ids={"task_id": hw_id},
             )
 
     transaction.on_commit(_notify)
@@ -127,31 +113,21 @@ def homework_assigned_handler(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=apps.get_model("attempts", "Submission"))
 def submission_graded_handler(sender, instance, created, update_fields=None, **kwargs):
-    """
-    When a Submission becomes GRADED, notify the student.
-
-    Debounce: One SUBMISSION_GRADED notification per submission.
-    """
-    Notification = _get_notification_model()
-
-    # Only act when status is GRADED
     if instance.status != instance.Status.GRADED:
         return
-
-    # If update_fields is present and status wasn't updated, ignore
     if not created and update_fields is not None and "status" not in update_fields:
         return
+    Notification = _get_notification_model()
+    user_id = instance.user_id
+    submission_id = instance.id
 
     def _notify():
-        # Debounce: one per (user, submission)
         if Notification.objects.filter(
-            user_id=instance.user_id,
+            user_id=user_id,
             notification_type=Notification.NotificationType.SUBMISSION_GRADED,
-            related_submission_id=instance.id,
+            related_submission_id=submission_id,
         ).exists():
             return
-
-        # Build message based on context
         if instance.homework_assignment:
             title = instance.homework_assignment.title
             message = f"Your homework submission for '{title}' has been graded."
@@ -163,13 +139,12 @@ def submission_graded_handler(sender, instance, created, update_fields=None, **k
         else:
             message = "Your submission has been graded."
             link = None
-
         NotificationService.send_notification(
-            user_id=instance.user_id,
+            user_id=user_id,
             message=message,
             type=Notification.NotificationType.SUBMISSION_GRADED,
             link=link,
-            related_ids={"submission_id": instance.id},
+            related_ids={"submission_id": submission_id},
         )
 
     transaction.on_commit(_notify)
@@ -181,37 +156,30 @@ def submission_graded_handler(sender, instance, created, update_fields=None, **k
 
 @receiver(post_save, sender=apps.get_model("groups", "GroupMembership"))
 def group_membership_created_handler(sender, instance, created, **kwargs):
-    """
-    Notify user when they are added to a group.
-
-    Covers both students and teachers.
-    Debounce: One GROUP_ADDED per (user, group).
-    """
     if not created:
         return
-
     Notification = _get_notification_model()
     group = instance.group
     user_id = instance.user_id
+    group_id = group.id
+    group_name = group.name
+    role = instance.role_in_group.capitalize()
+    link = f"/groups/{group_id}/"
+    message = f"You have been added to group '{group_name}' as {role}."
 
     def _notify():
         if Notification.objects.filter(
             user_id=user_id,
             notification_type=Notification.NotificationType.GROUP_ADDED,
-            related_group_id=group.id,
+            related_group_id=group_id,
         ).exists():
             return
-
-        role = instance.role_in_group.capitalize()
-        message = f"You have been added to group '{group.name}' as {role}."
-        link = f"/groups/{group.id}/"
-
         NotificationService.send_notification(
             user_id=user_id,
             message=message,
             type=Notification.NotificationType.GROUP_ADDED,
             link=link,
-            related_ids={"group_id": group.id},
+            related_ids={"group_id": group_id},
         )
 
     transaction.on_commit(_notify)

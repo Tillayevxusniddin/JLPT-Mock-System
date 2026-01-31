@@ -70,12 +70,14 @@ class Notification(TenantBaseModel):
 
     @property
     def user(self):
-        """Fetch the User object from the public schema."""
-        if self.user_id:
-            from apps.accounts.models import User
-            from apps.core.tenant_utils import with_public_schema
-            try:
-                return with_public_schema(lambda: User.objects.get(id=self.user_id))
-            except User.DoesNotExist:
-                return None
-        return None
+        """
+        Fetch the User object from the public schema.
+        Avoid using in list views; use user_map in serializer context instead to prevent N+1.
+        """
+        if not self.user_id:
+            return None
+        from apps.core.tenant_utils import get_public_user_by_id
+        try:
+            return get_public_user_by_id(self.user_id)
+        except Exception:
+            return None

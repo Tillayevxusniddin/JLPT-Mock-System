@@ -21,9 +21,10 @@ class ExamAssignment(TenantBaseModel):
     )
 
     status = models.CharField(
-        max_length=20, 
-        choices=RoomStatus.choices, 
+        max_length=20,
+        choices=RoomStatus.choices,
         default=RoomStatus.CLOSED,
+        db_index=True,
         help_text="Teacher/CenterAdmin controls this. 'OPEN' means students can see their assignments in exam roompage"
     )
 
@@ -60,11 +61,11 @@ class ExamAssignment(TenantBaseModel):
         if not self.title:
             raise ValidationError("Title is required.")
         
-        # LOGIC FIX: Only PUBLISHED tests can be assigned
+        # Only PUBLISHED tests can be assigned
         if self.mock_test:
-            if self.mock_test.status != "PUBLISHED":
+            from apps.mock_tests.models import MockTest
+            if self.mock_test.status != MockTest.Status.PUBLISHED:
                 raise ValidationError("Only PUBLISHED mock tests can be assigned.")
-            
             if self.mock_test.deleted_at is not None:
                 raise ValidationError("Deleted mock_test cannot be assigned.")
 
@@ -133,7 +134,8 @@ class HomeworkAssignment(TenantBaseModel):
 
     def clean(self):
         from django.utils import timezone
-        
+        from apps.mock_tests.models import MockTest
+
         if not self.title:
             raise ValidationError("Title is required.")
         
@@ -141,13 +143,9 @@ class HomeworkAssignment(TenantBaseModel):
         if self.deadline and self.deadline <= timezone.now():
             raise ValidationError("Deadline must be in the future.")
         
-        # Validate at least one resource (MockTest or Quiz) is assigned
-        # This will be checked in the serializer since M2M fields are set after save
-        # But we can check if both are empty in the serializer
-        
         # Validate all MockTests are PUBLISHED
         for mock_test in self.mock_tests.all():
-            if mock_test.status != "PUBLISHED":
+            if mock_test.status != MockTest.Status.PUBLISHED:
                 raise ValidationError(
                     f"Only PUBLISHED mock tests can be assigned. "
                     f"MockTest '{mock_test.title}' has status: {mock_test.status}"

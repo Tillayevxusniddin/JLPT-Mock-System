@@ -1,0 +1,9 @@
+# Extra deps for production deployment (add to main requirements or install separately)
+gunicorn>=21.0
+daphne>=4.0
+celery[redis]>=5.3
+channels>=4.0
+channels-redis>=4.2
+django-storages[s3]>=1.14
+boto3>=1.34
+django-redis>=5.4

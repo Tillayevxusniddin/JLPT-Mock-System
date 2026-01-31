@@ -1,25 +1,27 @@
-version: '3.8'
+# Multi-Tenant JLPT (mikan.uz) – Django, Daphne, Celery, Redis, PostgreSQL
+# Celery workers start only after Postgres and Redis are ready.
+
+version: "3.8"
 
 services:
-  # PostgreSQL Database
   db:
     image: postgres:15-alpine
     container_name: jlpt_db
     environment:
-      POSTGRES_DB: jlpt_mock_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${DB_NAME:-jlpt_mock_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-jlpt_mock_db}"]
+      interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
-  # Redis Cache & Celery Broker
   redis:
     image: redis:7-alpine
     container_name: jlpt_redis
@@ -29,34 +31,66 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
 
-  # Django Application
   web:
     build: .
     container_name: jlpt_web
     command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py migrate_tenants --skip-public &&
+             python manage.py collectstatic --noinput --clear || true &&
+             gunicorn config.wsgi:application -c deployment/gunicorn.conf.py --bind 0.0.0.0:8000"
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # Celery Worker
+  daphne:
+    build: .
+    container_name: jlpt_daphne
+    command: daphne -b 0.0.0.0 -p 8001 config.asgi:application
+    volumes:
+      - .:/app
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+
   celery_worker:
     build: .
     container_name: jlpt_celery_worker
@@ -64,43 +98,41 @@ services:
     volumes:
       - .:/app
       - media_volume:/app/media
-    env_file:
-      - .env
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
-      - db
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Celery Beat (Periodic Tasks)
   celery_beat:
     build: .
     container_name: jlpt_celery_beat
     command: celery -A config beat -l info
     volumes:
       - .:/app
-    env_file:
-      - .env
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
-      - db
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     restart: unless-stopped
-
-  # Nginx (Optional - for production)
-  # nginx:
-  #   image: nginx:alpine
-  #   container_name: jlpt_nginx
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/nginx.conf
-  #     - static_volume:/app/staticfiles
-  #     - media_volume:/app/media
-  #   depends_on:
-  #     - web
-  #   restart: unless-stopped
 
 volumes:
   postgres_data:
