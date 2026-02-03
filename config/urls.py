@@ -1,4 +1,9 @@
-#config/urls.py
+# config/urls.py
+"""
+URL configuration. OpenAPI schema is generated with a tenant schema set so
+tenant-scoped endpoints are introspected correctly; the schema is always reset
+to public afterward.
+"""
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
@@ -8,20 +13,23 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-from apps.core.tenant_utils import set_tenant_schema
 
-#TODO: If I gonna to create tenant-aware schema, I need to set the tenant
+from apps.core.tenant_utils import set_public_schema
+from config.spectacular import set_schema_for_spectacular
+
+
 class TenantAwareSpectacularAPIView(SpectacularAPIView):
+    """
+    Generate OpenAPI schema with a tenant schema active so tenant-scoped models
+    (e.g. Group, GroupMembership) are introspected. Always resets to public after.
+    """
+
     def get(self, request, *args, **kwargs):
+        set_schema_for_spectacular()
         try:
-            from apps.centers.models import Center
-            center = Center.objects.filter(is_active=True).exclude(schema_name__isnull=True).first()
-            if center and center.schema_name:
-                set_tenant_schema(center.schema_name)
-        except Exception:
-            pass
-            
-        return super().get(request, *args, **kwargs)
+            return super().get(request, *args, **kwargs)
+        finally:
+            set_public_schema()
 
 urlpatterns = [
     path("admin/", admin.site.urls),

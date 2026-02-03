@@ -72,17 +72,20 @@ class Center(PublicBaseModel):
     
     def save(self, *args, **kwargs):
         from django.db import transaction, IntegrityError
+        from django.core.files.storage import default_storage
         import random
         import string
 
-        if self.pk: # if update existing center
+        # Defer old avatar deletion until after commit to avoid orphaned S3 files on rollback
+        old_avatar_path = None
+        if self.pk:
             try:
                 old_center = Center.objects.get(pk=self.pk)
                 if old_center.avatar and old_center.avatar != self.avatar:
-                    old_center.avatar.delete(save=False)
+                    old_avatar_path = old_center.avatar.name
             except Center.DoesNotExist:
                 pass
-        
+
         max_retries = 5
         for attempt in range(max_retries):
             try:
@@ -118,6 +121,10 @@ class Center(PublicBaseModel):
                         self.schema_name = schema_candidate
 
                     super().save(*args, **kwargs)
+                    if old_avatar_path:
+                        transaction.on_commit(
+                            (lambda p: lambda: default_storage.delete(p))(old_avatar_path)
+                        )
                     break
             except IntegrityError as e:
                 if attempt == max_retries - 1:

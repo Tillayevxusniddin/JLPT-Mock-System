@@ -1,22 +1,55 @@
-asgiref==3.11.0
-attrs==25.4.0
+# Core
 Django==4.2.7
-django-cors-headers==4.3.1
 django-environ==0.11.2
+psycopg2-binary==2.9.9
+sqlparse==0.5.4
+
+# REST API
 djangorestframework==3.14.0
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.27.0
-inflection==0.5.1
-jsonschema==4.25.1
-jsonschema-specifications==2025.9.1
-pillow==12.0.0
-psycopg2-binary==2.9.9
+uritemplate==4.2.0
+
+# API & CORS
+django-cors-headers==4.3.1
+django-filter==24.3
+
+# Auth & security
 PyJWT==2.10.1
-python-decouple==3.8
+django-axes>=6.0.0,<9
+
+# Async & WebSockets
+channels>=4.0.0
+channels-redis>=4.2.0
+asgiref==3.11.0
+daphne>=4.0.0
+
+# Task queue
+celery[redis]>=5.3.0
+
+# Storage (S3-compatible)
+django-storages[s3]>=1.14.0
+boto3>=1.34.0
+
+# Cache (Redis)
+django-redis>=5.4.0
+
+# Media
+Pillow==12.0.0
+
+# Utils
 pytz==2025.2
 PyYAML==6.0.3
-referencing==0.37.0
-rpds-py==0.30.0
-sqlparse==0.5.4
-typing_extensions==4.15.0
-uritemplate==4.2.0
+inflection==0.5.1
+python-decouple==3.8
+
+# OpenAPI / JSON Schema (drf-spectacular deps)
+jsonschema>=4.25.0
+jsonschema-specifications>=2025.9.1
+referencing>=0.37.0
+rpds-py>=0.30.0
+attrs>=25.4.0
+typing_extensions>=4.15.0
+
+# Production servers (optional for local run; required for deploy)
+gunicorn>=21.0.0

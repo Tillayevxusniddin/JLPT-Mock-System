@@ -15,7 +15,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from apps.authentication.models import User
-from apps.authentication.serializers import UserListSerializer
+from apps.authentication.serializers import get_center_avatars_batch, UserListSerializer
+from apps.groups.models import GroupMembership as GM
 from apps.core.permissions import IsCenterAdmin
 from apps.groups.models import Group, GroupMembership
 from apps.groups.serializers import (
@@ -31,13 +32,13 @@ from apps.groups.swagger import (
 
 class IsCenterAdminOrGroupTeacher(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
-        if request.user.role == "CENTER_ADMIN":
+        if request.user.role == User.Role.CENTERADMIN:
             return True
         if request.user.role == "TEACHER":
             return GroupMembership.objects.filter(
                 group=obj, 
                 user_id=request.user.id, 
-                role_in_group="TEACHER"
+                role_in_group=GM.ROLE_TEACHER
             ).exists()
         return False
 
@@ -65,7 +66,7 @@ class GroupViewSet(viewsets.ModelViewSet):
             admin_count = with_public_schema(
                 lambda: User.objects.filter(
                     center_id=self.request.user.center_id,
-                    role="CENTER_ADMIN",
+                    role=User.Role.CENTERADMIN,
                     is_active=True
                 ).count()
             )
@@ -89,22 +90,22 @@ class GroupViewSet(viewsets.ModelViewSet):
         
         base_qs = Group.objects.order_by("name")
         
-        if user.role == "CENTER_ADMIN":
+        if user.role == User.Role.CENTERADMIN:
             return base_qs
         
-        if user.role == "STUDENT":
+        if user.role == User.Role.STUDENT:
             try:
                 my_group_ids = list(GroupMembership.objects.filter(
-                    user_id=user.id, role_in_group="STUDENT"
+                    user_id=user.id, role_in_group=GM.ROLE_STUDENT
                 ).values_list('group_id', flat=True))
                 return base_qs.filter(id__in=my_group_ids) if my_group_ids else Group.objects.none()
             except Exception:
                 return Group.objects.none()
         
-        if user.role == "TEACHER":
+        if user.role == User.Role.TEACHER:
             try:
                 my_group_ids = list(GroupMembership.objects.filter(
-                    user_id=user.id, role_in_group="TEACHER"
+                    user_id=user.id, role_in_group=GM.ROLE_TEACHER
                 ).values_list('group_id', flat=True))
                 return base_qs.filter(id__in=my_group_ids) if my_group_ids else Group.objects.none()
             except Exception:
@@ -128,7 +129,7 @@ class GroupViewSet(viewsets.ModelViewSet):
             group_ids = [group.id for group in groups_to_serialize]
             teacher_memberships = GroupMembership.objects.filter(
                 group_id__in=group_ids,
-                role_in_group="TEACHER"
+                role_in_group=GM.ROLE_TEACHER
             ).values('group_id', 'user_id')
             
             # Build mapping: {group_id: [teacher_id1, teacher_id2, ...]}
@@ -204,8 +205,8 @@ class GroupViewSet(viewsets.ModelViewSet):
         
         def fetch_members():
             admin_ids = User.global_objects.filter(
-                center_id=request.user.center_id, 
-                role="CENTER_ADMIN", 
+                center_id=request.user.center_id,
+                role=User.Role.CENTERADMIN,
                 is_active=True
             ).values_list('id', flat=True)
 
@@ -214,13 +215,25 @@ class GroupViewSet(viewsets.ModelViewSet):
         
         users_list = with_public_schema(fetch_members)
         
+        # Batch-fetch center avatars to avoid N+1 in UserListSerializer
+        center_ids = [u.center_id for u in users_list if getattr(u, "center_id", None)]
+        center_avatar_map = get_center_avatars_batch(center_ids) if center_ids else {}
+
         # 3. Pagination
         page = self.paginate_queryset(users_list)
         if page is not None:
-            serializer = UserListSerializer(page, many=True, context={'request': request})
+            serializer = UserListSerializer(
+                page,
+                many=True,
+                context={"request": request, "center_avatar_map": center_avatar_map},
+            )
             return self.get_paginated_response(serializer.data)
-        
-        serializer = UserListSerializer(users_list, many=True, context={'request': request})
+
+        serializer = UserListSerializer(
+            users_list,
+            many=True,
+            context={"request": request, "center_avatar_map": center_avatar_map},
+        )
         return Response(serializer.data)
 
 @group_membership_viewset_schema
@@ -250,18 +263,18 @@ class GroupMembershipViewSet(
         user = self.request.user
         base_qs = GroupMembership.objects.all()
 
-        if user.role == "CENTER_ADMIN":
+        if user.role == User.Role.CENTERADMIN:
             authorized_qs = base_qs
             
-        elif user.role == "TEACHER":
+        elif user.role == User.Role.TEACHER:
             my_teaching_groups = GroupMembership.objects.filter(
-                user_id=user.id, role_in_group="TEACHER"
+                user_id=user.id, role_in_group=GM.ROLE_TEACHER
             ).values_list('group_id', flat=True)
             authorized_qs = base_qs.filter(group_id__in=my_teaching_groups)
             
-        elif user.role == "STUDENT":
+        elif user.role == User.Role.STUDENT:
             my_group_ids = GroupMembership.objects.filter(
-                user_id=user.id, role_in_group="STUDENT"
+                user_id=user.id, role_in_group=GM.ROLE_STUDENT
             ).values_list("group_id", flat=True)
             authorized_qs = base_qs.filter(group_id__in=my_group_ids) if my_group_ids else base_qs.none()
             
@@ -291,20 +304,15 @@ class GroupMembershipViewSet(
         return authorized_qs.order_by('-created_at')
 
     def destroy(self, request, *args, **kwargs):
+        from apps.groups.utils import record_membership_removal_and_delete
+
         instance: GroupMembership = self.get_object()
-
-        if instance.role_in_group == "STUDENT":
-            from apps.groups.utils import remove_student_from_group
-            remove_student_from_group(
-                instance.user_id, request.user, reason="REMOVED", group_id=instance.group_id
-            )
-            return Response({"message": "Student removed."}, status=status.HTTP_200_OK)
-        
-        if instance.role_in_group == "TEACHER":
-            instance.delete()
-            return Response({"message": "Teacher removed from group."}, status=status.HTTP_200_OK)
-
-        return Response({"detail": "Invalid role."}, status=status.HTTP_400_BAD_REQUEST)
+        record_membership_removal_and_delete(instance, reason="REMOVED")
+        role_label = "Student" if instance.role_in_group == GM.ROLE_STUDENT else "Teacher"
+        return Response(
+            {"message": f"{role_label} removed from group."},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=['post'], url_path='bulk-add')
     def bulk_add(self, request):

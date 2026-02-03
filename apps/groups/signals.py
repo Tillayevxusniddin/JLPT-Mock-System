@@ -19,8 +19,12 @@ def update_group_counts(sender, instance: GroupMembership, **kwargs):
     try:
         group = instance.group
         
-        student_count = GroupMembership.objects.filter(group=group, role_in_group="STUDENT").count()
-        teacher_count = GroupMembership.objects.filter(group=group, role_in_group="TEACHER").count()
+        student_count = GroupMembership.objects.filter(
+            group=group, role_in_group=GroupMembership.ROLE_STUDENT
+        ).count()
+        teacher_count = GroupMembership.objects.filter(
+            group=group, role_in_group=GroupMembership.ROLE_TEACHER
+        ).count()
 
         group.student_count = student_count
         group.teacher_count = teacher_count
@@ -72,30 +76,26 @@ def notify_user_added_to_group(sender, instance: GroupMembership, created, **kwa
         center = with_public_schema(lambda: Center.objects.get(id=center_id))
 
         # Determine message and notification type based on role
-        if instance.role_in_group == "STUDENT":
+        if instance.role_in_group == GroupMembership.ROLE_STUDENT:
             msg = f"You have been added to group: {group_name}"
             notif_type = Notification.NotificationType.GROUP_ADDED
         
-        elif instance.role_in_group == "TEACHER":
+        elif instance.role_in_group == GroupMembership.ROLE_TEACHER:
             msg = f"You have been assigned as a teacher to group: {group_name}"
             notif_type = Notification.NotificationType.ASSIGNED_TO_GROUP
         
         else:
             return
 
-        # CRITICAL FIX: Create notification in PUBLIC schema
-        # We're currently in TENANT schema context, so we must explicitly switch
-        def create_notification_in_public_schema():
-            _create_notification(
-                center=center,
-                user_id=user_id,
-                message=msg,
-                link=group_link,
-                notification_type=notif_type,
-                related_group_id=instance.group_id
-            )
-        
-        with_public_schema(create_notification_in_public_schema)
+        # _create_notification(center=...) switches to center's tenant schema and creates there
+        _create_notification(
+            center=center,
+            user_id=user_id,
+            message=msg,
+            link=group_link,
+            notification_type=notif_type,
+            related_group_id=instance.group_id,
+        )
         logger.info(f"✅ Sent group membership notification to user {user_id}")
 
     except Exception as e:

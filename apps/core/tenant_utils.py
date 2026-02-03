@@ -5,13 +5,19 @@ PostgreSQL schema utilities for shared-DB, separate-schema multi-tenancy.
 - Context is tracked via contextvars so it is thread- and async-context safe
   within a single request/task. With CONN_MAX_AGE > 0, always set search_path
   at request start (TenantMiddleware) and end so pooled connections are safe.
+- For WebSocket consumers: use run_in_tenant_schema_async(schema_name, sync_func)
+  so DB work runs on the same connection that had search_path set (per-message
+  isolation).
 """
+import logging
 import re
 import contextvars
 from contextlib import contextmanager
 
 from asgiref.sync import sync_to_async
 from django.db import connection
+
+logger = logging.getLogger(__name__)
 
 try:
     from psycopg2 import sql
@@ -26,6 +32,7 @@ _current_schema = contextvars.ContextVar("current_schema", default="public")
 
 
 def get_current_schema():
+    """Return the current schema name from context (default 'public')."""
     return _current_schema.get()
 
 
@@ -43,6 +50,7 @@ def _validate_schema_name(schema_name):
 
 
 def set_tenant_schema(schema_name):
+    """Set the connection search_path and context to the given tenant schema."""
     _validate_schema_name(schema_name)
     with connection.cursor() as cursor:
         if sql:
@@ -119,7 +127,12 @@ def schema_context(schema_name):
         else:
             try:
                 set_tenant_schema(previous_schema)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "schema_context: failed to restore tenant %s, resetting to public: %s",
+                    previous_schema,
+                    e,
+                )
                 set_public_schema()
 
 
@@ -135,7 +148,12 @@ def with_public_schema(func):
         else:
             try:
                 set_tenant_schema(previous_schema)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "with_public_schema: failed to restore tenant %s, resetting to public: %s",
+                    previous_schema,
+                    e,
+                )
                 set_public_schema()
 
 
@@ -155,16 +173,48 @@ def get_public_user_by_id(user_id):
         else:
             try:
                 set_tenant_schema(previous_schema)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "get_public_user_by_id: failed to restore tenant %s, resetting to public: %s",
+                    previous_schema,
+                    e,
+                )
                 set_public_schema()
+
+# =============================================================================
+# RUN IN TENANT SCHEMA (sync + async for WebSocket consumers)
+# =============================================================================
+# In ASGI/Channels, each sync_to_async call can use a different DB connection.
+# Use run_in_tenant_schema_async(schema_name, sync_func) so the same connection
+# is used for SET search_path and the subsequent queries (per-message isolation).
+
+
+def run_in_tenant_schema(schema_name, sync_func):
+    """
+    Run sync_func with search_path set to schema_name, then restore.
+    Use this inside database_sync_to_async in WebSocket consumers so one
+    connection is used for SET search_path and the DB work.
+    """
+    with schema_context(schema_name):
+        return sync_func()
+
+
+async def run_in_tenant_schema_async(schema_name, sync_func):
+    """
+    Run sync_func in tenant schema on a single DB connection (Channels).
+    Use in WebSocket consumer methods that touch the DB for reliable
+    per-message schema isolation.
+    """
+    from channels.db import database_sync_to_async
+    return await database_sync_to_async(run_in_tenant_schema)(schema_name, sync_func)
+
 
 # =============================================================================
 # ASYNC SCHEMA SWITCHING (Django Channels)
 # =============================================================================
-# Each sync_to_async call may run in a different thread and use a different
-# connection from the pool. For WebSocket consumers, prefer wrapping each
-# message handler's DB work in database_sync_to_async(lambda: (set_tenant_schema(s); do_work()))
-# so the same connection is used for SET search_path and the subsequent queries.
+# Legacy helpers; per-connection isolation is not guaranteed when using
+# set_tenant_schema_async in middleware and then separate DB calls in the consumer.
+# Prefer run_in_tenant_schema_async in consumer methods.
 
 async def set_tenant_schema_async(schema_name):
     await sync_to_async(set_tenant_schema)(schema_name)

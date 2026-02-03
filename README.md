@@ -1,342 +1,237 @@
-# 🎯 JLPT Mock System - Backend API
+# JLPT Mock System – Backend API
 
-Professional online JLPT (Japanese Language Proficiency Test) mock testing platform for language centers.
+Multi-tenant backend for the JLPT (Japanese Language Proficiency Test) mock exam platform (mikan.uz).  
+Django REST API with PostgreSQL (schema-per-tenant), Redis, Celery, and WebSockets.
 
-## 📋 Features
+---
 
-### 🔐 Multi-tenant Architecture
+## Features
 
-- **OWNER**: Platform administrator managing all centers
-- **CENTERADMIN**: Language center administrators
-- **TEACHER**: Test creators and graders
-- **STUDENT**: Test takers
+- **Multi-tenant:** Centers (organizations) with isolated tenant schemas; JWT + subdomain-aware auth
+- **Roles:** Owner, Center Admin, Teacher, Student, Guest
+- **Mock tests & quizzes:** N5–N1 levels; sections, question groups, listening/media; publish flow
+- **Assignments:** Exam rooms and homework; group or individual; deadlines
+- **Attempts:** Start/submit exams and homework; auto-grading; snapshots
+- **Notifications:** REST + WebSocket (real-time)
+- **Analytics:** Dashboards per role (owner, center admin, teacher, student)
+- **Storage:** Local files or S3-compatible (e.g. MinIO, AWS) with optional private/signed URLs
 
-### 📚 JLPT Test Management
+---
 
-- Support for all levels (N5-N1)
-- Simplified structure: **Level → Mondai → Question**
-- 4-choice multiple-choice questions
-- Real JLPT format and timing
-- Image and audio support
+## Tech stack
 
-### 🎓 Assignment System
+- **Django 4.2** + **Django REST Framework** + **drf-spectacular** (OpenAPI 3)
+- **PostgreSQL** (multi-tenant via schemas)
+- **Redis** (cache, Celery broker, Channels)
+- **Celery** + **Celery Beat**
+- **Daphne** (ASGI / WebSockets)
+- **JWT** (Simple JWT), **django-cors-headers**, **django-axes**, **django-storages** (S3)
 
-- Group assignments (entire class)
-- Individual assignments (specific students)
-- Configurable settings (retakes, time limits, etc.)
-- Automatic grading
+---
 
-### 📊 Analytics & Progress Tracking
+## Prerequisites
 
-- Student progress dashboards
-- Organization-level statistics
-- Teacher performance metrics
-- Detailed attempt analysis
+- **Python 3.11+**
+- **PostgreSQL 14+**
+- **Redis 7+**
 
-### 🔒 Security & Audit
+---
 
-- JWT authentication
-- Role-based permissions
-- Complete audit trail
-- Secure multi-tenancy
+## Run on localhost
 
-## 🛠️ Tech Stack
-
-- **Framework**: Django 4.2 + Django REST Framework
-- **Database**: PostgreSQL
-- **Cache**: Redis
-- **Task Queue**: Celery + Celery Beat
-- **Authentication**: JWT (Simple JWT)
-- **API Docs**: drf-spectacular (OpenAPI 3)
-- **Storage**: AWS S3 / Local
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL 14+
-- Redis 7+
-
-### Installation
-
-1. **Clone the repository**
+### 1. Clone and enter the project
 
 ```bash
-git clone https://github.com/yourusername/jlpt-mock-system.git
-cd jlpt-mock-system
+git clone <repository-url>
+cd jlpt_mock_system
 ```
 
-2. **Create virtual environment**
+### 2. Create and activate a virtual environment
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate   # Linux/macOS
+# or: venv\Scripts\activate   # Windows
 ```
 
-3. **Install dependencies**
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **Setup environment variables**
+### 4. Environment variables
+
+Copy the example env file and edit it with your values:
 
 ```bash
 cp .env.example .env
-# Edit .env with your settings
+# or, if your repo has env.example:  cp env.example .env
 ```
 
-5. **Run migrations**
+See [Environment variables](#environment-variables) and the comments in `.env.example` (or `env.example`) for what to set. For a minimal local run you need at least:
+
+- `DJANGO_SECRET_KEY` – any long random string
+- `POSTGRES_PASSWORD` – your PostgreSQL password
+- `DB_NAME`, `DB_USER`, `DB_HOST`, `DB_PORT` – match your local Postgres
+
+### 5. Database and tenant migrations
+
+Create the database (if it does not exist), then run migrations:
 
 ```bash
-python manage.py makemigrations
+# Create DB (example; use your postgres user)
+psql -U postgres -c "CREATE DATABASE jlpt_mock_db;"
+
+# Apply public schema migrations
 python manage.py migrate
+
+# Create tenant schemas and run tenant migrations (required for multi-tenant)
+python manage.py migrate_tenants
 ```
 
-6. **Create superuser**
+### 6. (Optional) Create a superuser and first center
 
 ```bash
 python manage.py createsuperuser
 ```
 
-7. **Run development server**
+Then use the API or admin to create a Center; tenant migrations for that center are created automatically (or run `migrate_tenants` again).
+
+### 7. Run the Django server
 
 ```bash
 python manage.py runserver
 ```
 
-8. **Run Celery worker** (in another terminal)
+API base: **http://127.0.0.1:8000/**  
+- API v1: **http://127.0.0.1:8000/api/v1/**  
+- Swagger UI: **http://127.0.0.1:8000/api/docs/**  
+- Health: **http://127.0.0.1:8000/health/**
+
+### 8. Run Redis (required for Celery and WebSockets)
+
+Start Redis on the default port (e.g. `redis-server` or Docker).  
+If your `.env` uses `REDIS_URL=redis://localhost:6379/0`, no change needed.
+
+### 9. Run Celery worker (optional, for async tasks)
+
+In a second terminal (with the same venv and `.env`):
 
 ```bash
 celery -A config worker -l info
 ```
 
-9. **Run Celery beat** (for periodic tasks)
+### 10. Run Celery Beat (optional, for scheduled tasks)
+
+In a third terminal:
 
 ```bash
 celery -A config beat -l info
 ```
 
-## 📁 Project Structure
+### 11. Run Daphne (optional, for WebSockets)
+
+For real-time notifications:
+
+```bash
+daphne -b 127.0.0.1 -p 8001 config.asgi:application
+```
+
+Then point WebSocket clients to `ws://127.0.0.1:8001/ws/...` (or proxy via Nginx in production).
+
+---
+
+## Environment variables
+
+All supported keys are listed in **`.env.example`** with short comments. Copy `.env.example` to `.env` and fill in the values.
+
+Summary:
+
+| Key | Description | Local example |
+|-----|-------------|----------------|
+| `DJANGO_SECRET_KEY` | Django secret key | Long random string |
+| `DJANGO_DEBUG` | Debug mode | `True` |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated hosts | `localhost,127.0.0.1,.mikan.uz` |
+| `DB_NAME` | PostgreSQL database name | `jlpt_mock_db` |
+| `DB_USER` | PostgreSQL user | `postgres` |
+| `POSTGRES_PASSWORD` | PostgreSQL password | (required) |
+| `DB_HOST` | PostgreSQL host | `localhost` |
+| `DB_PORT` | PostgreSQL port | `5432` |
+| `REDIS_URL` | Redis URL | `redis://localhost:6379/0` |
+| `CELERY_BROKER_URL` | Celery broker | Same as `REDIS_URL` or set explicitly |
+| `CELERY_RESULT_BACKEND` | Celery results | Same as broker or set explicitly |
+| `FRONTEND_URL_BASE` | Frontend base URL (emails, CORS) | `http://localhost:3000` |
+| `USE_S3` | Use S3-compatible storage | `False` for local |
+| (Optional) | Email, AWS, Axes, etc. | See `.env.example` |
+
+Production: set `DJANGO_SETTINGS_MODULE=config.settings.production` (or use `config.settings.development` for local). Then configure `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `SECRET_KEY`/`DJANGO_SECRET_KEY`, and optional SSL/email/S3 as in `.env.example`.
+
+---
+
+## Project structure
 
 ```
 jlpt_mock_system/
+├── api/v1/              # API URL routing and router (viewsets)
 ├── apps/
-│   ├── core/              # Base models & utilities
-│   ├── authentication/    # User management
-│   ├── organizations/     # Multi-tenancy
-│   ├── groups/           # Student groups
-│   ├── invitations/      # Invitation system
-│   ├── mock_tests/       # JLPT tests (Level→Mondai→Question)
-│   ├── assignments/      # Test assignments
-│   ├── attempts/         # Student attempts
-│   ├── analytics/        # Statistics
-│   └── audit/           # Audit logging
-├── config/              # Django settings
-├── media/              # User uploads
-├── static/             # Static files
-└── templates/          # Email templates
+│   ├── core/            # Middleware, tenant utils, auth, serializers
+│   ├── authentication/  # User, JWT, login, registration
+│   ├── centers/         # Centers, invitations, contact requests
+│   ├── groups/          # Groups, memberships
+│   ├── materials/       # Materials
+│   ├── mock_tests/      # Mock tests, sections, questions, quizzes
+│   ├── assignments/     # Exam and homework assignments
+│   ├── attempts/        # Submissions, grading
+│   ├── notifications/   # Notifications (REST + WebSocket)
+│   ├── analytics/       # Dashboards
+│   └── chat/            # Chat
+├── config/              # Django settings, WSGI/ASGI, Celery, storage
+├── deployment/          # Nginx, Gunicorn, Daphne, Celery systemd units
+├── templates/           # Email templates
+├── manage.py
+├── requirements.txt
+├── .env.example         # All env keys and descriptions
+└── docker-compose.yml   # Full stack (DB, Redis, web, Daphne, Celery)
 ```
 
-## 🔑 API Endpoints
+---
 
-### Authentication
+## API overview
 
-- `POST /api/auth/register/` - User registration
-- `POST /api/auth/login/` - Login (get JWT tokens)
-- `POST /api/auth/refresh/` - Refresh access token
-- `POST /api/auth/logout/` - Logout
+- **Auth:** `/api/v1/auth/register/`, `/api/v1/auth/login/`, `/api/v1/auth/me/`, etc.
+- **Centers:** `/api/v1/owner-centers/`, `/api/v1/center-admin-centers/`, invitations, guests
+- **Groups:** `/api/v1/groups/`, `/api/v1/group-memberships/`
+- **Materials:** `/api/v1/materials/`
+- **Mock tests:** `/api/v1/mock-tests/`, sections, question-groups, questions, quizzes
+- **Assignments:** `/api/v1/exam-assignments/`, `/api/v1/homework-assignments/`
+- **Attempts:** `/api/v1/submissions/` (with custom actions for start/submit exam and homework)
+- **Notifications:** `/api/v1/notifications/`
+- **Analytics:** `/api/v1/analytics/owner/`, `center-admin/`, `teacher/`, `student/`
+- **Docs:** `/api/docs/` (Swagger), `/api/schema/` (OpenAPI schema)
 
-### Organizations
+---
 
-- `GET /api/organizations/` - List organizations (OWNER only)
-- `POST /api/organizations/` - Create organization
-- `GET /api/organizations/{id}/` - Organization details
-- `PATCH /api/organizations/{id}/` - Update organization
-
-### Groups
-
-- `GET /api/groups/` - List groups
-- `POST /api/groups/` - Create group
-- `GET /api/groups/{id}/` - Group details
-- `POST /api/groups/{id}/add-student/` - Add student to group
-
-### Invitations
-
-- `GET /api/invitations/` - List invitation codes
-- `POST /api/invitations/` - Create invitation code
-- `POST /api/invitations/use/` - Use invitation code
-
-### Mock Tests
-
-- `GET /api/mock-tests/` - List tests
-- `POST /api/mock-tests/` - Create test
-- `GET /api/mock-tests/{id}/` - Test details
-- `POST /api/mock-tests/{id}/publish/` - Publish test
-
-### Mondais
-
-- `GET /api/mock-tests/{test_id}/mondais/` - List mondais
-- `POST /api/mock-tests/{test_id}/mondais/` - Create mondai
-- `GET /api/mondais/{id}/` - Mondai details
-
-### Questions
-
-- `GET /api/mondais/{mondai_id}/questions/` - List questions
-- `POST /api/mondais/{mondai_id}/questions/` - Create question
-- `GET /api/questions/{id}/` - Question details
-
-### Assignments
-
-- `GET /api/assignments/` - List assignments
-- `POST /api/assignments/` - Create assignment
-- `GET /api/assignments/{id}/` - Assignment details
-- `GET /api/assignments/my-tasks/` - Student's tasks
-
-### Attempts
-
-- `GET /api/attempts/` - List attempts
-- `POST /api/attempts/` - Start attempt
-- `POST /api/attempts/{id}/submit/` - Submit attempt
-- `GET /api/attempts/{id}/results/` - View results
-
-### Analytics
-
-- `GET /api/analytics/student-progress/` - Student progress
-- `GET /api/analytics/organization-stats/` - Organization stats
-- `GET /api/analytics/teacher-stats/` - Teacher statistics
-
-## 🧪 Testing
-
-Run tests:
-
-```bash
-pytest
-```
-
-With coverage:
-
-```bash
-pytest --cov=apps --cov-report=html
-```
-
-## 📝 Database Models
-
-### Core Models
-
-- **TimeStampedModel**: Base with `id`, `created_at`, `updated_at`
-- **TenantBaseModel**: Multi-tenant base with `organization_id`
-
-### Main Models
-
-1. **User**: Custom user (OWNER, CENTERADMIN, TEACHER, STUDENT)
-2. **Organization**: Language centers
-3. **Group**: Student groups (N5, N4, etc.)
-4. **InvitationCode**: Student invitation system
-5. **MockTest**: JLPT test container
-6. **Mondai**: Question sets (文字語彙, 文法, 読解, 聴解)
-7. **Question**: Individual questions (4 choices)
-8. **Choice**: Answer choices
-9. **Assignment**: Test assignments
-10. **Attempt**: Student test attempts
-11. **Answer**: Student answers
-12. **StudentProgress**: Progress tracking
-13. **AuditLog**: Activity logging
-
-## 🔄 Data Flow
-
-1. **OWNER** creates **Organization** → **CENTERADMIN** account
-2. **CENTERADMIN** creates **Groups** and **Teachers**
-3. **CENTERADMIN** generates **InvitationCode**
-4. **Students** use code to join
-5. **TEACHER** creates **MockTest** (with Mondais and Questions)
-6. **TEACHER** creates **Assignment** (to Group or Student)
-7. **STUDENT** takes test (**Attempt** created)
-8. **STUDENT** submits → auto-graded (**Answers** evaluated)
-9. **TEACHER** reviews and gives feedback
-10. **Analytics** updated automatically
-
-## 🔐 Permissions
-
-### OWNER
-
-- Manage all organizations
-- View platform-wide statistics
-- Create/suspend organizations
-
-### CENTERADMIN
-
-- Manage own organization
-- Create/manage teachers
-- Create/manage groups
-- Generate invitation codes
-- View organization statistics
-
-### TEACHER
-
-- Create/manage mock tests
-- Create assignments
-- View student results
-- Give feedback
-- View assigned groups
-
-### STUDENT
-
-- View assigned tests
-- Take tests
-- View own results
-- View progress
-
-## 🌍 Environment Variables
-
-See `.env.example` for all available configuration options.
-
-Key settings:
-
-- `SECRET_KEY`: Django secret key
-- `DEBUG`: Debug mode (False in production)
-- `DATABASE_URL`: PostgreSQL connection
-- `REDIS_URL`: Redis connection
-- `ALLOWED_HOSTS`: Allowed domains
-- `CORS_ALLOWED_ORIGINS`: Frontend URLs
-
-## 📦 Deployment
-
-### Using Docker
+## Running with Docker
 
 ```bash
 docker-compose up -d
 ```
 
-### Manual Deployment
-
-1. Set `DEBUG=False`
-2. Configure production database
-3. Set up Redis
-4. Configure AWS S3 for media files
-5. Set up Nginx + Gunicorn
-6. Configure SSL certificate
-7. Set up Celery as systemd service
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
-## 📧 Contact
-
-- **Email**: support@jlptmock.com
-- **Website**: https://jlptmock.com
-- **Documentation**: https://docs.jlptmock.com
+This starts PostgreSQL, Redis, the web app (migrate + migrate_tenants + collectstatic + Gunicorn), Daphne, and Celery worker + beat. See `docker-compose.yml` and `deployment/README.md` for production-style deployment (systemd, Nginx).
 
 ---
 
-**Made with ❤️ for Japanese language learners worldwide 🇯🇵**
+## Testing
+
+```bash
+pytest
+# or with coverage:
+pytest --cov=apps --cov-report=html
+```
+
+---
+
+## License
+
+MIT.

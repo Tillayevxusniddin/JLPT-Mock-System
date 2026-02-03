@@ -75,7 +75,7 @@ def notify_owner_on_contact_request(sender, instance, created, **kwargs):
     User = apps.get_model("authentication", "User")
     
     # Find all Owner users
-    owner_users = User.objects.filter(role="OWNER", is_active=True)
+    owner_users = User.objects.filter(role=User.Role.OWNER, is_active=True)
     
     if not owner_users.exists():
         return

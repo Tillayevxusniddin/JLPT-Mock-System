@@ -97,7 +97,7 @@ class OwnerCenterListSerializer(serializers.ModelSerializer):
         return list(
             User.objects.filter(
                 center_id=obj.id,
-                role="CENTER_ADMIN",
+                role=User.Role.CENTERADMIN,
                 is_active=True,
             ).values("id", "email", "first_name", "last_name")
         )
@@ -122,7 +122,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         is_guest = data.get("is_guest", False)
 
         # Only CENTER_ADMIN can create invitations
-        if inviter.role != "CENTER_ADMIN":
+        if inviter.role != User.Role.CENTERADMIN:
             raise serializers.ValidationError("Only CENTER_ADMIN can create invitations.")
 
         if not inviter.center_id:
@@ -130,13 +130,13 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
         # Guest mode rules
         if is_guest:
-            if role != "STUDENT":
+            if role != User.Role.STUDENT:
                 raise serializers.ValidationError(
                     {"role": "Guest mode is only available for STUDENT role."}
                 )
 
         # Assistant role removed, so no need to check teacher existence
-        if role not in ["TEACHER", "STUDENT"]:
+        if role not in (User.Role.TEACHER, User.Role.STUDENT):
              raise serializers.ValidationError("Invalid role. Allowed: TEACHER, STUDENT.")
 
         return data
@@ -202,7 +202,7 @@ class InvitationApproveSerializer(serializers.Serializer):
         data["invitation"] = invitation
 
         request = self.context.get("request")
-        if request and request.user.role != "CENTER_ADMIN":
+        if request and request.user.role != User.Role.CENTERADMIN:
             raise serializers.ValidationError({"code": "Only CENTER_ADMIN can approve invitations."})
 
         return data
@@ -229,7 +229,7 @@ class CenterAdminCreateSerializer(serializers.Serializer):
         if User.objects.filter(email=value, center=center).exists():
             raise serializers.ValidationError("User with this email already exists in this center.")
 
-        if User.objects.filter(email=value, role="OWNER").exists():
+        if User.objects.filter(email=value, role=User.Role.OWNER).exists():
             raise serializers.ValidationError("This email is reserved for platform administrators.")
             
         return value
@@ -241,7 +241,7 @@ class CenterAdminCreateSerializer(serializers.Serializer):
             password=validated_data["password"],
             first_name=validated_data["first_name"],
             last_name=validated_data["last_name"],
-            role="CENTER_ADMIN",
+            role=User.Role.CENTERADMIN,
             center=center,
             is_approved=True,
             is_staff=True,
@@ -286,7 +286,7 @@ class CenterAdminUpdateSerializer(serializers.ModelSerializer):
         fields = ["first_name", "last_name", "is_approved", "is_active"]
     
     def validate(self, attrs):
-        if self.instance and self.instance.role != "CENTER_ADMIN":
+        if self.instance and self.instance.role != User.Role.CENTERADMIN:
             raise serializers.ValidationError("Only CenterAdmin users can be updated through this endpoint.")
         return attrs
 
@@ -385,7 +385,7 @@ class GuestUpgradeSerializer(serializers.Serializer):
             raise serializers.ValidationError("Request context required.")
         
         try:
-            user = User.objects.get(id=value, role="GUEST")
+            user = User.objects.get(id=value, role=User.Role.GUEST)
         except User.DoesNotExist:
             raise serializers.ValidationError("User not found or is not a GUEST.")
         
@@ -413,7 +413,7 @@ class GuestUpgradeSerializer(serializers.Serializer):
             Invitation.objects.create(
                 id=uuid.uuid4(),
                 code=generate_code(10),
-                role="STUDENT",
+                role=User.Role.STUDENT,
                 center=guest_user.center,
                 invited_by=request.user,
                 target_user=guest_user,
@@ -423,7 +423,7 @@ class GuestUpgradeSerializer(serializers.Serializer):
             )
             
             # Upgrade user
-            guest_user.role = "STUDENT"
+            guest_user.role = User.Role.STUDENT
             guest_user.is_active = True
             guest_user.is_approved = True
             guest_user.save()

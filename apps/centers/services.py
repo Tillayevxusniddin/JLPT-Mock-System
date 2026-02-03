@@ -30,26 +30,26 @@ def approve_invitation(invitation: Invitation, approver: User) -> User:
     if approver.center_id != invitation.center_id:
         raise PermissionDenied("Invitation does not belong to this center.")
     
-    if approver.role != "CENTER_ADMIN":
+    if approver.role != User.Role.CENTERADMIN:
         raise PermissionDenied("Only CENTER_ADMIN can approve invitations.")
 
     target.center = invitation.center
     role = invitation.role
     is_guest = invitation.is_guest
-    migrating_guest_to_student = role == "STUDENT" and target.role == "GUEST"
+    migrating_guest_to_student = role == User.Role.STUDENT and target.role == User.Role.GUEST
 
     # Handle GUEST→STUDENT upgrade first (approving a guest invitation for STUDENT)
     if migrating_guest_to_student:
-        target.role = "STUDENT"
+        target.role = User.Role.STUDENT
         logger.info("Upgrading GUEST user %s to STUDENT.", target.id)
     elif is_guest:
-        target.role = "GUEST"
-    elif role == "GUEST":
-        target.role = "GUEST"
-    elif role == "STUDENT":
-        target.role = "STUDENT"
-    elif role == "TEACHER":
-        target.role = "TEACHER"
+        target.role = User.Role.GUEST
+    elif role == User.Role.GUEST:
+        target.role = User.Role.GUEST
+    elif role == User.Role.STUDENT:
+        target.role = User.Role.STUDENT
+    elif role == User.Role.TEACHER:
+        target.role = User.Role.TEACHER
 
     target.is_approved = True
     target.save(update_fields=["center", "role", "is_approved", "updated_at"])
@@ -83,22 +83,17 @@ def approve_invitation(invitation: Invitation, approver: User) -> User:
         except Exception as e:
             logger.error(f"Error in tenant schema actions for invitation {invitation.id}: {e}", exc_info=True)
         
-        # Step 2: Create notification in PUBLIC schema (OUTSIDE tenant context)
-        # CRITICAL FIX: Notification table is in public schema, must not be inside schema_context
+        # Step 2: Notify user (notification is created in center's tenant schema by _create_notification)
         try:
             from apps.notifications.signals import _create_notification
-            from apps.core.tenant_utils import set_public_schema
             Notification = apps.get_model("notifications", "Notification")
-            
-            # Ensure we're in public schema
-            set_public_schema()
-            
+
             msg = f"Your account has been approved! Welcome to {invitation.center.name}."
             _create_notification(
                 center=invitation.center,
                 user_id=target.id,
                 message=msg,
-                notification_type=Notification.NotificationType.INVITATION_APPROVED
+                notification_type=Notification.NotificationType.INVITATION_APPROVED,
             )
             logger.info(f"✅ Sent approval notification to user {target.id}")
         except Exception as e:

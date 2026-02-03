@@ -249,9 +249,8 @@ MEMBERSHIP_CREATE_400_EXAMPLES = [
 MEMBERSHIP_DESTROY_DESCRIPTION = """
 Remove a member from a group. **CENTER_ADMIN only.**
 
-**Behavior:**
-- **STUDENT:** The membership is deleted and a record is created in **GroupMembershipHistory** (reason: REMOVED). This preserves an audit trail of who left when.
-- **TEACHER:** The membership is deleted; no history record is created.
+**Behavior:** For both **STUDENT** and **TEACHER**, the membership is deleted and a record is
+created in **GroupMembershipHistory** (reason: REMOVED). This preserves a consistent audit trail.
 """
 
 BULK_ADD_DESCRIPTION = """

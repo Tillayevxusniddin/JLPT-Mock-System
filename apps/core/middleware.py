@@ -5,6 +5,10 @@ Multi-tenant schema isolation middleware.
 CRITICAL: Always reset to public schema at request start (connection may come from
 pool with a tenant search_path) and at request end so connections returned to the
 pool are safe for the next request.
+
+SchemaResetWrapperMiddleware guarantees reset in a try/finally so schema is reset
+even when an exception is raised in middleware before the view (where
+process_response would not run). It should be first in MIDDLEWARE.
 """
 import logging
 import threading
@@ -15,6 +19,28 @@ from django.utils.deprecation import MiddlewareMixin
 from apps.core.tenant_utils import set_public_schema, get_current_schema
 
 logger = logging.getLogger(__name__)
+
+
+class SchemaResetWrapperMiddleware:
+    """
+    Wraps the entire request in try/finally and resets DB search_path to public
+    in finally. Ensures the connection is never returned to the pool with a
+    tenant schema, even when an exception is raised in middleware or view.
+    Place this first in MIDDLEWARE.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        set_public_schema()
+        try:
+            return self.get_response(request)
+        finally:
+            try:
+                set_public_schema()
+            except Exception as e:
+                logger.critical("SchemaResetWrapperMiddleware: failed to reset schema in finally: %s", e)
 
 
 class TenantMiddleware(MiddlewareMixin):

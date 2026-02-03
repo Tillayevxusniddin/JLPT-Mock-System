@@ -179,12 +179,12 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
             return (
                 Center.objects.all()
                 .annotate(
-                    teacher_count=Count("user_set", filter=Q(user_set__role="TEACHER"))
+                    teacher_count=Count("user_set", filter=Q(user_set__role=User.Role.TEACHER))
                 )
                 .prefetch_related(
                     Prefetch(
                         "user_set",
-                        User.objects.filter(role="CENTER_ADMIN").only(
+                        User.objects.filter(role=User.Role.CENTERADMIN).only(
                             "id", "email", "first_name", "last_name", "center_id"
                         ),
                         to_attr="center_admins",
@@ -263,7 +263,7 @@ class OwnerCenterAdminViewSet(viewsets.ModelViewSet):
             return User.objects.none()
         
         return User.global_objects.filter(
-            role="CENTER_ADMIN",
+            role=User.Role.CENTERADMIN,
             deleted_at__isnull=True
         ).select_related('center').order_by("-created_at")
 
@@ -359,16 +359,21 @@ class CenterAvatarUploadView(generics.UpdateAPIView):
         return Center.objects.get(id=user.center_id)
     
     def update(self, request, *args, **kwargs):
+        from django.db import transaction
+        from django.core.files.storage import default_storage
+
         center = self.get_object()
         if 'avatar' not in request.FILES:
             return Response({'avatar': ['No avatar file provided.']}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if center.avatar:
-            try: center.avatar.delete(save=False)
-            except: pass
-        
+
+        old_avatar_path = center.avatar.name if center.avatar else None
         center.avatar = request.FILES['avatar']
-        center.save(update_fields=['avatar', 'updated_at'])
+        with transaction.atomic():
+            center.save(update_fields=['avatar', 'updated_at'])
+            if old_avatar_path:
+                transaction.on_commit(
+                    (lambda p: lambda: default_storage.delete(p))(old_avatar_path)
+                )
         return Response(self.get_serializer(center).data, status=status.HTTP_200_OK)
 
 
@@ -441,7 +446,9 @@ class GuestListView(generics.ListAPIView):
             return User.objects.none()
         
         user = self.request.user
-        return User.objects.filter(center_id=user.center_id, role="GUEST").order_by("-created_at")
+        return User.objects.filter(
+            center_id=user.center_id, role=User.Role.GUEST
+        ).order_by("-created_at")
 
 
 

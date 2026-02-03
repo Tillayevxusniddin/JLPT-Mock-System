@@ -5,8 +5,10 @@ the authenticated user's center.
 
 Caveat (CONN_MAX_AGE > 0): sync_to_async runs in a thread pool; each call may
 use a different connection. So the schema set here might not apply to the next
-DB call in the consumer. For reliable per-message schema isolation, wrap each
-consumer method's DB work in database_sync_to_async(lambda: (set_tenant_schema(s); do_work())).
+DB call in the consumer. For reliable per-message schema isolation when a
+consumer performs DB work, use run_in_tenant_schema_async(schema_name, sync_func)
+from apps.core.tenant_utils so the same connection is used for SET search_path
+and the queries.
 """
 import logging
 

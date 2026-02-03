@@ -51,8 +51,6 @@ SHARED_APPS = [
     "apps.core",
     "apps.authentication",
     "apps.centers",
-    "apps.invitations",
-
 ]
 
 TENANT_APPS = [
@@ -74,8 +72,9 @@ TENANT_APPS = [
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
-    'apps.core.middleware.RequestLogMiddleware',
-    'django.middleware.security.SecurityMiddleware',
+    "apps.core.middleware.SchemaResetWrapperMiddleware",
+    "apps.core.middleware.RequestLogMiddleware",
+    "django.middleware.security.SecurityMiddleware",
     'corsheaders.middleware.CorsMiddleware',  # CORS must be before CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -325,6 +324,11 @@ REST_FRAMEWORK = {
         'uploads': '1000/hour',
     },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# drf-spectacular: exclude admin and health from OpenAPI schema
+SPECTACULAR_SETTINGS = {
+    "PREPROCESSING_HOOKS": ["config.spectacular.custom_preprocessing_hook"],
 }
 
 #TODO: need to consider

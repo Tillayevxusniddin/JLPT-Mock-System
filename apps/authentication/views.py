@@ -17,6 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.authentication.models import User
 from apps.authentication.serializers import (
+    get_center_avatars_batch,
     LoginSerializer,
     LogoutRequestSerializer,
     PasswordResetConfirmSerializer,
@@ -193,6 +194,27 @@ class UserViewSet(viewsets.ModelViewSet):
             return UserListSerializer
         return UserManagementSerializer
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            users = list(page)
+        else:
+            users = list(queryset)
+        center_ids = [u.center_id for u in users if getattr(u, "center_id", None)]
+        center_avatar_map = get_center_avatars_batch(center_ids) if center_ids else {}
+        serializer = self.get_serializer(
+            page if page is not None else users,
+            many=True,
+            context={
+                **self.get_serializer_context(),
+                "center_avatar_map": center_avatar_map,
+            },
+        )
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return User.objects.none()
@@ -239,7 +261,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def check_permissions(self, request):
         super().check_permissions(request)
-        if request.user.role == "TEACHER" and self.action not in ("list", "retrieve"):
+        if request.user.role == User.Role.TEACHER and self.action not in ("list", "retrieve"):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Teachers are only allowed to view students.")
 

@@ -30,6 +30,7 @@ except Exception:  # pragma: no cover
 
 
 def get_user_groups_from_tenant(user):
+    """Fetch a single user's groups from their center's tenant schema. Use for detail views."""
     if not getattr(user, "center_id", None):
         return []
     try:
@@ -57,6 +58,62 @@ def get_user_groups_from_tenant(user):
     except Exception as e:
         logger.exception("Error fetching groups for user %s: %s", user.id, e)
         return []
+
+
+def get_my_groups_batch(users):
+    """
+    Batch-fetch my_groups for multiple users. Returns {user_id: [{"id", "name", "role"}, ...]}.
+    Call from public schema; uses one schema switch per distinct center_id.
+    """
+    from apps.centers.models import Center
+    from apps.core.tenant_utils import with_public_schema, schema_context
+    from apps.groups.models import GroupMembership
+
+    users = [u for u in users if getattr(u, "center_id", None)]
+    if not users:
+        return {}
+    center_ids = {getattr(u, "center_id") for u in users}
+    center_schemas = with_public_schema(
+        lambda: dict(
+            Center.objects.filter(id__in=center_ids).values_list("id", "schema_name")
+        )
+    )
+    result = {u.id: [] for u in users}
+    for center_id, schema_name in (center_schemas or {}).items():
+        if not schema_name:
+            continue
+        user_ids_in_center = [u.id for u in users if getattr(u, "center_id") == center_id]
+        with schema_context(schema_name):
+            memberships = GroupMembership.objects.filter(
+                user_id__in=user_ids_in_center
+            ).values("user_id", "group__id", "group__name", "role_in_group")
+            for m in memberships:
+                uid = m["user_id"]
+                if uid in result:
+                    result[uid].append({
+                        "id": m["group__id"],
+                        "name": m["group__name"],
+                        "role": m["role_in_group"],
+                    })
+    return result
+
+
+def get_center_avatars_batch(center_ids):
+    """
+    Batch-fetch center avatar URLs for given center IDs. Returns {center_id: avatar_url}.
+    Call from public schema. Use in list views to avoid N+1 when serializing center_avatar.
+    """
+    from apps.centers.models import Center
+    from apps.core.tenant_utils import with_public_schema
+
+    center_ids = [c for c in center_ids if c is not None]
+    if not center_ids:
+        return {}
+    def _fetch():
+        qs = Center.objects.filter(id__in=center_ids).only("id", "avatar")
+        return {c.id: (c.avatar.url if c.avatar else None) for c in qs}
+
+    return with_public_schema(_fetch) or {}
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -120,6 +177,9 @@ class UserListSerializer(serializers.ModelSerializer):
     def get_center_avatar(self, obj):
         if not obj.center_id:
             return None
+        center_avatar_map = self.context.get("center_avatar_map") or {}
+        if obj.center_id in center_avatar_map:
+            return center_avatar_map[obj.center_id]
         try:
             from apps.core.tenant_utils import with_public_schema
             from apps.centers.models import Center
@@ -147,6 +207,9 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "role", "center", "is_approved"]
     
     def get_my_groups(self, obj):
+        my_groups_map = self.context.get("my_groups_map") or {}
+        if obj.id in my_groups_map:
+            return my_groups_map[obj.id]
         return get_user_groups_from_tenant(obj)
 
     def get_center_info(self, obj):
@@ -184,6 +247,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "role", "created_at", "email"]
 
     def get_my_groups(self, obj):
+        my_groups_map = self.context.get("my_groups_map") or {}
+        if obj.id in my_groups_map:
+            return my_groups_map[obj.id]
         return get_user_groups_from_tenant(obj)
 
     def validate_email(self, value):
@@ -245,7 +311,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"invitation_code": "Invitation expired."}
             )
-        if invitation.role in ("OWNER", "CENTER_ADMIN"):
+        if invitation.role in (User.Role.OWNER, User.Role.CENTERADMIN):
             raise serializers.ValidationError({
                 "invitation_code": (
                     "Administrators cannot register via public API. "
@@ -311,7 +377,7 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError({"detail": "User account is disabled."})
         if not user.is_approved:
             raise serializers.ValidationError({"detail": "Account pending approval."})
-        if user.center and user.role != "OWNER":
+        if user.center and user.role != User.Role.OWNER:
             if not user.center.is_active: 
                 raise serializers.ValidationError({
                     "detail": "This center is currently suspended. Please contact support."

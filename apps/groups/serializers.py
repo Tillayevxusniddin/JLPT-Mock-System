@@ -50,8 +50,8 @@ class GroupListSerializer(serializers.ModelSerializer):
             # 1. Get Teacher IDs from Tenant Schema
             teacher_ids = list(
                 GroupMembership.objects.filter(
-                    group=obj, 
-                    role_in_group="TEACHER"
+                    group=obj,
+                    role_in_group=GroupMembership.ROLE_TEACHER,
                 ).values_list('user_id', flat=True)
             )
             
@@ -113,7 +113,7 @@ class GroupSerializer(serializers.ModelSerializer):
             for user in users:
                 if user.center_id != request.user.center_id:
                     raise serializers.ValidationError(f"User {user.id} belongs to another center.")
-                if user.role != "TEACHER":
+                if user.role != User.Role.TEACHER:
                     raise serializers.ValidationError(f"User {user.id} is not a TEACHER.")
             return True
 
@@ -131,8 +131,9 @@ class GroupSerializer(serializers.ModelSerializer):
                     GroupMembership(
                         group=group,
                         user_id=tid,
-                        role_in_group="TEACHER"
-                    ) for tid in teacher_ids
+                        role_in_group=GroupMembership.ROLE_TEACHER,
+                    )
+                    for tid in teacher_ids
                 ]
                 GroupMembership.objects.bulk_create(memberships)
                 
@@ -189,14 +190,17 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
 
         role_in_group = attrs["role_in_group"]
         
-        if role_in_group == "TEACHER" and target_user.role != "TEACHER":
-             raise serializers.ValidationError("User role must be TEACHER to be added as a teacher.")
-             
-        if role_in_group == "STUDENT" and target_user.role not in ["STUDENT", "GUEST"]:
+        if role_in_group == GroupMembership.ROLE_TEACHER and target_user.role != User.Role.TEACHER:
+            raise serializers.ValidationError("User role must be TEACHER to be added as a teacher.")
+
+        if role_in_group == GroupMembership.ROLE_STUDENT and target_user.role not in (
+            User.Role.STUDENT,
+            User.Role.GUEST,
+        ):
             raise serializers.ValidationError("User role must be STUDENT or GUEST.")
 
         group = Group.objects.get(id=attrs["group_id"])
-        if role_in_group == "STUDENT" and group.student_count >= group.max_students:
+        if role_in_group == GroupMembership.ROLE_STUDENT and group.student_count >= group.max_students:
             raise serializers.ValidationError(
                 {"group": f"Group is full (max {group.max_students} students)."}
             )
@@ -225,7 +229,7 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
     )
 
     def _validate_members_structure(self, members_data):
-        allowed_roles = {"STUDENT", "TEACHER"}
+        allowed_roles = {GroupMembership.ROLE_STUDENT, GroupMembership.ROLE_TEACHER}
         for i, m in enumerate(members_data):
             if not isinstance(m, dict):
                 raise serializers.ValidationError(
@@ -275,9 +279,12 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
             role = m.get('role_in_group')
             user = user_map.get(uid)
             
-            if role == "TEACHER" and user.role != "TEACHER":
+            if role == GroupMembership.ROLE_TEACHER and user.role != User.Role.TEACHER:
                 raise serializers.ValidationError(f"User {uid} is not a TEACHER.")
-            if role == "STUDENT" and user.role not in ["STUDENT", "GUEST"]:
+            if role == GroupMembership.ROLE_STUDENT and user.role not in (
+                User.Role.STUDENT,
+                User.Role.GUEST,
+            ):
                 raise serializers.ValidationError(f"User {uid} cannot be added as STUDENT.")
                 
         return attrs
@@ -318,7 +325,7 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
                     )
                 )
                 existing_user_ids.add(uid)
-                if role == "STUDENT":
+                if role == GroupMembership.ROLE_STUDENT:
                     new_student_count += 1
 
             # Enforce max_students (group full)
@@ -337,10 +344,10 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
             if new_memberships:
                 GroupMembership.objects.bulk_create(new_memberships)
                 group.student_count = GroupMembership.objects.filter(
-                    group=group, role_in_group="STUDENT"
+                    group=group, role_in_group=GroupMembership.ROLE_STUDENT
                 ).count()
                 group.teacher_count = GroupMembership.objects.filter(
-                    group=group, role_in_group="TEACHER"
+                    group=group, role_in_group=GroupMembership.ROLE_TEACHER
                 ).count()
                 group.save(update_fields=["student_count", "teacher_count"])
 
