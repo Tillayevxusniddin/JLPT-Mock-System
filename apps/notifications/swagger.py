@@ -17,6 +17,12 @@ iteration and batch debounce (one per (user, homework) pair).
 **REST:** list (filter by is_read), retrieve, partial_update (mark as read), mark-all-read (POST).
 **Signals:** All notification triggers use transaction.on_commit() so the real-time push
 happens only after the DB transaction commits.
+
+**New notification types (2026):**
+- Student: EXAM_UPDATED, EXAM_CLOSING_SOON, HOMEWORK_UPDATED, HOMEWORK_DEADLINE_CHANGED
+- Teacher: NEW_SUBMISSION, REVIEW_OVERDUE, STUDENT_JOINED_GROUP
+- Center Admin: MOCK_TEST_PUBLISHED
+- Owner: CONTACT_REQUEST_HIGH_PRIORITY, MIGRATION_FAILED
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -88,6 +94,36 @@ WS_SUBMISSION_GRADED_EXAMPLE = {
     "updated_at": "2025-01-29T14:00:00Z",
 }
 
+WS_EXAM_UPDATED_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440006",
+    "user_id": 1,
+    "notification_type": "EXAM_UPDATED",
+    "message": "Exam 'JLPT N5 Mock - Room A' has been updated.",
+    "is_read": False,
+    "link": "/exams/880e8400-e29b-41d4-a716-446655440003/",
+    "related_task_id": "880e8400-e29b-41d4-a716-446655440003",
+    "related_submission_id": None,
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-01-29T15:00:00Z",
+    "updated_at": "2025-01-29T15:00:00Z",
+}
+
+WS_EXAM_CLOSING_SOON_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440007",
+    "user_id": 1,
+    "notification_type": "EXAM_CLOSING_SOON",
+    "message": "Exam 'JLPT N5 Mock - Room A' will close in 1 hour.",
+    "is_read": False,
+    "link": "/exams/880e8400-e29b-41d4-a716-446655440003/",
+    "related_task_id": "880e8400-e29b-41d4-a716-446655440003",
+    "related_submission_id": None,
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-01-29T16:00:00Z",
+    "updated_at": "2025-01-29T16:00:00Z",
+}
+
 # Export for schema description / WebSocket docs
 WEBSOCKET_DESCRIPTION = """
 **WebSocket URL:** `ws/notifications/` (e.g. `wss://your-api/ws/notifications/`).
@@ -134,6 +170,16 @@ notification_viewset_schema = extend_schema_view(
             OpenApiExample(
                 "SUBMISSION_GRADED (link to results)",
                 value=[WS_SUBMISSION_GRADED_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "EXAM_UPDATED (schedule change)",
+                value=[WS_EXAM_UPDATED_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "EXAM_CLOSING_SOON (1 hour reminder)",
+                value=[WS_EXAM_CLOSING_SOON_EXAMPLE],
                 response_only=True,
             ),
         ],

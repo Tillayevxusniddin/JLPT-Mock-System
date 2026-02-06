@@ -1,4 +1,5 @@
 # apps/mock_tests/services.py
+from typing import Optional, Union
 from django.core.exceptions import ValidationError
 from .models import MockTest, TestSection, QuestionGroup, Question
 
@@ -6,12 +7,18 @@ from .models import MockTest, TestSection, QuestionGroup, Question
 PUBLISHED_TEST_EDIT_MESSAGE = "Cannot modify a published test."
 
 
-def validate_mock_test_editable(mock_test_instance):
+def validate_mock_test_editable(mock_test_instance: Optional[MockTest]) -> None:
     """
     Validate that a MockTest instance is editable.
     Raises ValidationError if the MockTest status is PUBLISHED.
     Call before any create/update/delete on MockTest or its children
     (TestSection, QuestionGroup, Question).
+    
+    Args:
+        mock_test_instance: MockTest instance to validate
+        
+    Raises:
+        ValidationError: If MockTest is None or status is PUBLISHED
     """
     if not mock_test_instance:
         raise ValidationError("MockTest instance is required.")
@@ -19,9 +26,10 @@ def validate_mock_test_editable(mock_test_instance):
         raise ValidationError(PUBLISHED_TEST_EDIT_MESSAGE)
 
 
-def get_parent_mock_test(obj):
+def get_parent_mock_test(obj: Union[MockTest, TestSection, QuestionGroup, Question]) -> Optional[MockTest]:
     """
     Get the parent MockTest instance from any child object.
+    Uses select_related optimization to avoid N+1 queries.
     
     Args:
         obj: Instance of MockTest, TestSection, QuestionGroup, or Question
@@ -46,7 +54,7 @@ def get_parent_mock_test(obj):
     return None
 
 
-def validate_child_object_editable(obj):
+def validate_child_object_editable(obj: Union[TestSection, QuestionGroup, Question]) -> None:
     """
     Validate that a child object (TestSection, QuestionGroup, Question) is editable
     by checking its parent MockTest status.

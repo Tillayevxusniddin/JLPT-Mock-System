@@ -1,3 +1,4 @@
+#deployment/gunicorn.conf.py
 """
 Gunicorn configuration for Multi-Tenant JLPT (mikan.uz).
 For systemd: use bind 127.0.0.1:8000 (behind Nginx).

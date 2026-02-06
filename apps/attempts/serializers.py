@@ -19,6 +19,8 @@ class ExamQuestionSerializer(serializers.ModelSerializer):
     It MUST NOT include:
     - correct_option_index
     - is_correct flags in options
+    
+    Note: correct_option_index is excluded via fields list (not in fields).
     """
     # Override options to exclude is_correct flag
     options = serializers.SerializerMethodField()
@@ -30,8 +32,6 @@ class ExamQuestionSerializer(serializers.ModelSerializer):
             "score", "order", "options", "created_at", "updated_at"
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-        # Explicitly exclude correct_option_index
-        exclude = ["correct_option_index"]
 
     def get_options(self, obj):
         """
@@ -102,6 +102,8 @@ class ExamPaperSerializer(serializers.ModelSerializer):
 class QuizQuestionPaperSerializer(serializers.ModelSerializer):
     """
     QuizQuestion serializer for quiz paper (SECURITY: excludes correct answers).
+    
+    Note: correct_option_index is excluded via fields list (not in fields).
     """
     options = serializers.SerializerMethodField()
     
@@ -112,7 +114,6 @@ class QuizQuestionPaperSerializer(serializers.ModelSerializer):
             "points", "order", "options", "created_at", "updated_at"
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-        exclude = ["correct_option_index"]
     
     def get_options(self, obj):
         """Return options without is_correct flag for security."""

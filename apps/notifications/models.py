@@ -17,14 +17,19 @@ class Notification(TenantBaseModel):
         # Student notifications
         TASK_ASSIGNED = "TASK_ASSIGNED", "Task Assigned"  # Homework assigned
         EXAM_OPENED = "EXAM_OPENED", "Exam Room Opened"  # Exam status -> OPEN
+        EXAM_UPDATED = "EXAM_UPDATED", "Exam Updated"
+        EXAM_CLOSING_SOON = "EXAM_CLOSING_SOON", "Exam Closing Soon"
         SUBMISSION_GRADED = "SUBMISSION_GRADED", "Submission Graded"  # Homework auto/manual graded
         EXAM_PUBLISHED = "EXAM_PUBLISHED", "Exam Results Published"  # Exam results released
         DEADLINE_APPROACHING = "DEADLINE_APPROACHING", "Deadline Approaching"
         DEADLINE_MISSED = "DEADLINE_MISSED", "Deadline Missed"
+        HOMEWORK_UPDATED = "HOMEWORK_UPDATED", "Homework Updated"
+        HOMEWORK_DEADLINE_CHANGED = "HOMEWORK_DEADLINE_CHANGED", "Homework Deadline Changed"
         
         # Teacher notifications
         NEW_SUBMISSION = "NEW_SUBMISSION", "New Submission"  # Student submitted homework
         REVIEW_OVERDUE = "REVIEW_OVERDUE", "Review Overdue"  # Homework waiting grading > 48h
+        STUDENT_JOINED_GROUP = "STUDENT_JOINED_GROUP", "Student Joined Group"
         
         # General notifications
         INVITATION_APPROVED = "INVITATION_APPROVED", "Invitation Approved"
@@ -34,6 +39,9 @@ class Notification(TenantBaseModel):
         STUDENT_APPROVED = "STUDENT_APPROVED", "Student Approved"
         PENDING_APPROVAL = "PENDING_APPROVAL", "User Waiting for Approval"
         CONTACT_REQUEST = "CONTACT_REQUEST", "Contact Request Received"
+        CONTACT_REQUEST_HIGH_PRIORITY = "CONTACT_REQUEST_HIGH_PRIORITY", "High Priority Contact Request"
+        MOCK_TEST_PUBLISHED = "MOCK_TEST_PUBLISHED", "Mock Test Published"
+        MIGRATION_FAILED = "MIGRATION_FAILED", "Schema Migration Failed"
         ANNOUNCEMENT = "ANNOUNCEMENT", "Announcement"
     
     # Cross-schema FK replacement: User is in Public schema

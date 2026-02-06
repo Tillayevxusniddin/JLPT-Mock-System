@@ -168,6 +168,7 @@ STUDENT_DESCRIPTION = """
 - **upcoming_deadlines:** Homeworks with deadline in future where user is in **assigned_groups** OR **assigned_user_ids**, excluding homeworks for which the user already has a **GRADED** submission.
 - **recent_results:** Last 10 graded submissions with assignment title and score.
 - **skill_performance:** Derived from **Submission.results** (JLPT section_results: Vocabulary, Reading, Listening; or Language & Reading + Listening for N4/N5; or Quiz percentage). Exact structure for charts: `[{"skill_name": "Listening", "average_score": 45.5}, ...]`.
+- **skill_performance (standardized):** Always includes ordered entries for Vocabulary, Reading, Listening, Language & Reading, and Quiz (missing values = 0.0), plus any extra sections.
 - **submission_trend_count:** Optional (null); reserved for trend metrics.
 """
 STUDENT_RESPONSE_EXAMPLE = {

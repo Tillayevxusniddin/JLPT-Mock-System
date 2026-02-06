@@ -1,9 +1,10 @@
 # apps/notifications/services.py
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from django.apps import apps
 from django.db import transaction
 import logging
+
+from apps.core.tenant_utils import get_current_schema
+from apps.notifications.tasks import dispatch_ws_notification
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,13 @@ class NotificationService:
     """
 
     @staticmethod
-    def send_notification(user_id, message, type, link=None, related_ids=None):
+    def send_notification(
+        user_id: int,
+        message: str,
+        type: str,
+        link: str | None = None,
+        related_ids: dict | None = None,
+    ):
         """
         Create a Notification row and push it via WebSocket.
 
@@ -50,6 +57,30 @@ class NotificationService:
 
         related_ids = related_ids or {}
 
+        current_schema = get_current_schema()
+        if current_schema == "public":
+            logger.warning(
+                "send_notification called in public schema; notification will not be persisted."
+            )
+            payload = {
+                "id": None,
+                "user_id": user_id,
+                "notification_type": type,
+                "message": message,
+                "is_read": False,
+                "link": link,
+                "related_task_id": related_ids.get("task_id") if related_ids else None,
+                "related_submission_id": related_ids.get("submission_id") if related_ids else None,
+                "related_group_id": related_ids.get("group_id") if related_ids else None,
+                "related_contact_request_id": related_ids.get("contact_request_id") if related_ids else None,
+                "created_at": None,
+                "updated_at": None,
+            }
+            try:
+                dispatch_ws_notification.delay(user_id, payload)
+            except Exception as e:
+                logger.error("Failed to enqueue WS notification for %s: %s", user_id, e)
+            return None
         Notification = apps.get_model("notifications", "Notification")
         from apps.notifications.serializers import NotificationSerializer  # lazy import
 
@@ -65,7 +96,7 @@ class NotificationService:
             related_contact_request_id=related_ids.get("contact_request_id"),
         )
 
-        # Step 2: WebSocket push
+        # Step 2: WebSocket push (offloaded to Celery)
         try:
             payload = NotificationSerializer(notification).data
         except Exception as e:
@@ -78,30 +109,21 @@ class NotificationService:
                 "link": notification.link,
             }
 
-        channel_layer = get_channel_layer()
-        if not channel_layer:
-            logger.warning("No channel layer configured; skipping WS dispatch.")
-            return notification
-
-        # Server-only group name; no URL or client input. Prevents cross-tenant/user access.
-        group_name = f"notify_{user_id}"
-
         try:
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "send_notification",  # mapped to consumer method
-                    "message": payload,
-                },
-            )
+            dispatch_ws_notification.delay(user_id, payload)
         except Exception as e:
-            # DB notification is already stored; WS failure should not break flow
-            logger.error("Failed to send WS notification to %s: %s", group_name, e)
+            logger.error("Failed to enqueue WS notification for %s: %s", user_id, e)
 
         return notification
 
     @staticmethod
-    def send_notification_on_commit(user_id, message, type, link=None, related_ids=None):
+    def send_notification_on_commit(
+        user_id: int,
+        message: str,
+        type: str,
+        link: str | None = None,
+        related_ids: dict | None = None,
+    ) -> None:
         """
         Convenience helper: schedule notification after current DB transaction commits.
         Useful in signal handlers to avoid race conditions.

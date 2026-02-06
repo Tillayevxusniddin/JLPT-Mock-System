@@ -1,10 +1,15 @@
 # apps/assignments/services.py
 
+from typing import Optional, List, Dict, Any
 from django.core.exceptions import ValidationError
 from apps.mock_tests.models import MockTest
 
 
-def validate_assignment_payload(mock_test, group_ids=None, user_ids=None):
+def validate_assignment_payload(
+    mock_test: MockTest, 
+    group_ids: Optional[List[str]] = None, 
+    user_ids: Optional[List[int]] = None
+) -> Dict[str, Any]:
     """
     Validate assignment payload before creation/update.
     
@@ -97,11 +102,18 @@ def validate_assignment_payload(mock_test, group_ids=None, user_ids=None):
     }
 
 
-def validate_user_ids_belong_to_tenant(user_ids, tenant_center_id):
+def validate_user_ids_belong_to_tenant(user_ids: List[int], tenant_center_id: int) -> None:
     """
     Validate that all user_ids exist in the **Public Schema** (User table) and
     belong to the **Current Center** (User.center_id == tenant_center_id).
     Raises ValidationError if any ID is missing or belongs to another center.
+    
+    Args:
+        user_ids: List of User IDs (integers) to validate
+        tenant_center_id: The center ID that users must belong to
+        
+    Raises:
+        ValidationError: If any user ID doesn't exist or belongs to another center
     """
     if not user_ids:
         return

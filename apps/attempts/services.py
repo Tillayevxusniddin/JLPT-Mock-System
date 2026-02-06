@@ -1,5 +1,6 @@
 # apps/attempts/services.py
 
+from typing import Dict, Any, Tuple, Optional
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -21,7 +22,7 @@ class StartExamService:
     
     @staticmethod
     @transaction.atomic
-    def start_exam(user, exam_assignment_id):
+    def start_exam(user, exam_assignment_id: str) -> Tuple[Submission, Dict[str, Any]]:
         """
         Start an exam for a user.
         
@@ -293,11 +294,21 @@ class GradingService:
     
     @staticmethod
     @transaction.atomic
-    def grade_submission(submission, student_answers):
+    def grade_submission(submission: Submission, student_answers: Dict[str, int]) -> Dict[str, Any]:
         """
         Grade a submission and SAVE in one atomic transaction.
         Immutability: Only STARTED submissions can be graded; once GRADED they cannot be modified.
         CRITICAL: Creates snapshot (including correct answers) before grading for historical integrity.
+        
+        Args:
+            submission: Submission instance
+            student_answers: Dict with format {question_uuid: selected_option_index}
+            
+        Returns:
+            Dict: Grading results
+            
+        Raises:
+            ValidationError: If submission is not STARTED or missing resource
         """
         if submission.status != Submission.Status.STARTED:
             raise ValidationError(
@@ -351,7 +362,7 @@ class GradingService:
         section_scores = {}
         section_question_results = {}
         
-        # Initialize section tracking
+        # Initialize section tracking with ALL questions to ensure correct max_score
         for question in questions:
             section_id = str(question.group.section.id)
             if section_id not in section_scores:
@@ -362,6 +373,9 @@ class GradingService:
                     'questions': {}
                 }
                 section_question_results[section_id] = {}
+            
+            # Add question's max score to section max_score (whether answered or not)
+            section_scores[section_id]['max_score'] += Decimal(str(question.score))
         
         # Grade each answer
         for question_id_str, selected_index in student_answers.items():
@@ -383,7 +397,6 @@ class GradingService:
             
             # Add to section score
             section_scores[section_id]['score'] += question_score
-            section_scores[section_id]['max_score'] += Decimal(str(question.score))
             
             # Store question result (no correct_index / is_correct leak; student sees only correct bool + score)
             section_question_results[section_id][question_id_str] = {
@@ -505,8 +518,28 @@ class GradingService:
         """
         Fetch complete mock test structure for exam paper.
         Used by StartExamService to return exam paper data.
+        Optimized with prefetch_related to avoid N+1 queries.
         """
         from apps.attempts.serializers import ExamPaperSerializer
+        from django.db.models import Prefetch
+        
+        # Prefetch the entire hierarchy to avoid N+1
+        mock_test = MockTest.objects.prefetch_related(
+            Prefetch(
+                'sections',
+                queryset=TestSection.objects.select_related('mock_test').prefetch_related(
+                    Prefetch(
+                        'question_groups',
+                        queryset=QuestionGroup.objects.select_related('section').prefetch_related(
+                            Prefetch(
+                                'questions',
+                                queryset=Question.objects.select_related('group').order_by('order')
+                            )
+                        ).order_by('order')
+                    )
+                ).order_by('order')
+            )
+        ).get(id=mock_test.id)
         
         serializer = ExamPaperSerializer(mock_test)
         return serializer.data
@@ -515,8 +548,17 @@ class GradingService:
     def _fetch_quiz_structure(quiz):
         """
         Fetch complete quiz structure for homework paper.
+        Optimized with prefetch_related to avoid N+1 queries.
         """
         from apps.attempts.serializers import QuizPaperSerializer
+        
+        # Prefetch questions to avoid N+1
+        quiz = Quiz.objects.prefetch_related(
+            Prefetch(
+                'questions',
+                queryset=QuizQuestion.objects.select_related('quiz').order_by('order')
+            )
+        ).get(id=quiz.id)
         
         serializer = QuizPaperSerializer(quiz)
         return serializer.data

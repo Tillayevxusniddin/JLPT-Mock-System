@@ -6,7 +6,11 @@ post_delete: When a QuestionGroup, Question, or QuizQuestion is hard-deleted,
 remove associated media files (audio_file, image) from storage (S3/filesystem)
 to avoid orphaned files. MockTest delete cascades to sections -> groups -> questions,
 so each model's post_delete runs when the hierarchy is removed.
+
+All deletions are wrapped in transaction.on_commit to ensure files are only deleted
+if the database transaction commits successfully.
 """
+from django.db import transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
@@ -15,36 +19,47 @@ from .models import QuestionGroup, Question, QuizQuestion
 
 @receiver(post_delete, sender=QuestionGroup)
 def delete_question_group_media(sender, instance, **kwargs):
+    files_to_delete = []
     if instance.audio_file:
-        try:
-            instance.audio_file.delete(save=False)
-        except Exception:
-            pass
+        files_to_delete.append(instance.audio_file)
     if instance.image:
-        try:
-            instance.image.delete(save=False)
-        except Exception:
-            pass
+        files_to_delete.append(instance.image)
+    
+    if files_to_delete:
+        def delete_files():
+            for file_field in files_to_delete:
+                try:
+                    file_field.delete(save=False)
+                except Exception:
+                    pass
+        transaction.on_commit(delete_files)
 
 
 @receiver(post_delete, sender=Question)
 def delete_question_media(sender, instance, **kwargs):
+    files_to_delete = []
     if instance.audio_file:
-        try:
-            instance.audio_file.delete(save=False)
-        except Exception:
-            pass
+        files_to_delete.append(instance.audio_file)
     if instance.image:
-        try:
-            instance.image.delete(save=False)
-        except Exception:
-            pass
+        files_to_delete.append(instance.image)
+    
+    if files_to_delete:
+        def delete_files():
+            for file_field in files_to_delete:
+                try:
+                    file_field.delete(save=False)
+                except Exception:
+                    pass
+        transaction.on_commit(delete_files)
 
 
 @receiver(post_delete, sender=QuizQuestion)
 def delete_quiz_question_media(sender, instance, **kwargs):
     if instance.image:
-        try:
-            instance.image.delete(save=False)
-        except Exception:
-            pass
+        image_to_delete = instance.image
+        def delete_file():
+            try:
+                image_to_delete.delete(save=False)
+            except Exception:
+                pass
+        transaction.on_commit(delete_file)

@@ -81,38 +81,9 @@ class IsMockTestAdminOrTeacherOrReadOnly(permissions.BasePermission):
                 if not mock_test.created_by_id:
                     return False
                 
-                # Handle type mismatch: created_by_id is UUIDField but User.id is BigAutoField
-                # Compare by converting both to strings or integers
-                try:
-                    created_by_id = mock_test.created_by_id
-                    user_id = user.id
-                    
-                    # Try direct comparison first
-                    if created_by_id == user_id:
-                        return True
-                    
-                    # Try string comparison
-                    if str(created_by_id) == str(user_id):
-                        return True
-                    
-                    # Try converting UUID to int if possible
-                    if hasattr(created_by_id, '__int__'):
-                        if int(created_by_id) == user_id:
-                            return True
-                    
-                    # Try converting int to UUID string representation
-                    import uuid
-                    try:
-                        # If created_by_id is stored as UUID string representation of user.id
-                        uuid_from_int = uuid.UUID(int=user_id)
-                        if str(created_by_id) == str(uuid_from_int):
-                            return True
-                    except (ValueError, OverflowError):
-                        pass
-                    
-                    return False
-                except (ValueError, TypeError, AttributeError):
-                    return False
+                # created_by_id is BigIntegerField and user.id is BigAutoField (both integers)
+                # Direct comparison should work
+                return mock_test.created_by_id == user.id
             
             # If no mock_test and not Quiz/QuizQuestion, deny access
             return False

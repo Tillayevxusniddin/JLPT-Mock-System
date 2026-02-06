@@ -98,6 +98,29 @@ def run_tenant_migrations(self, schema_name):
     
     except Exception as e:
         logger.error(f"❌ Failed to run migrations: {str(e)}", exc_info=True)
+        try:
+            if self.request.retries >= self.max_retries:
+                from apps.core.tenant_utils import with_public_schema
+                from apps.authentication.models import User
+                from apps.notifications.services import NotificationService
+                from apps.notifications.models import Notification
+
+                def get_owner_ids():
+                    return list(
+                        User.objects.filter(role=User.Role.OWNER).values_list("id", flat=True)
+                    )
+
+                owner_ids = with_public_schema(get_owner_ids)
+                for uid in owner_ids:
+                    NotificationService.send_notification(
+                        user_id=uid,
+                        message=f"Schema migration failed for tenant '{schema_name}'.",
+                        type=Notification.NotificationType.MIGRATION_FAILED,
+                        link=None,
+                        related_ids=None,
+                    )
+        except Exception as notify_err:
+            logger.error("Failed to notify owners about migration failure: %s", notify_err)
         raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
     
     finally:
