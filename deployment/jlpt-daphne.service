@@ -1,32 +1,73 @@
 [Unit]
-Description=JLPT Daphne ASGI (mikan.uz WebSockets)
-After=network.target postgresql.service redis.service
+Description=JLPT Daphne WebSocket Server
+Documentation=https://github.com/django/daphne
+After=network.target docker.service
+Wants=jlpt-gunicorn.service
 
 [Service]
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/mikan
-Environment="PATH=/var/www/mikan/venv/bin"
-EnvironmentFile=/var/www/mikan/.env
-Environment=DJANGO_SETTINGS_MODULE=config.settings.production
-ExecStart=/var/www/mikan/venv/bin/daphne \
-    --bind 127.0.0.1 \
-    --port 8001 \
-    --proxy-headers \
-    --verbosity 1 \
+WorkingDirectory=/app
+
+# ========================================
+# Security Hardening
+# ========================================
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ========================================
+# Process Management
+# ========================================
+ExecStart=/usr/bin/docker exec jlpt_daphne daphne \
+    -b 0.0.0.0 \
+    -p 8001 \
+    --timeout 86400 \
     config.asgi:application
-ExecStop=/bin/kill -TERM $MAINPID
-KillSignal=SIGTERM
+
+ExecStop=/usr/bin/docker exec jlpt_daphne kill -TERM 1
+
+# Graceful shutdown: Allow 30 seconds for WebSocket clients to reconnect
+TimeoutStopSec=30
 KillMode=mixed
+KillSignal=SIGTERM
+
+# ========================================
+# Restart Policy
+# ========================================
 Restart=on-failure
 RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=5
+
+# ========================================
+# Resource Limits
+# ========================================
+CPUQuota=100%
+CPUAccounting=true
+MemoryMax=1G
+MemoryAccounting=true
 LimitNOFILE=65536
-NoNewPrivileges=true
-PrivateTmp=true
+LimitNPROC=8192
+
+# ========================================
+# Logging
+# ========================================
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=jlpt-daphne
+Environment="DJANGO_SETTINGS_MODULE=config.settings.production"
 
 [Install]
 WantedBy=multi-user.target

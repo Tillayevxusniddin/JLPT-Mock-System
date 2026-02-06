@@ -1,0 +1,36 @@
+#!/bin/bash
+# ========================================
+# Cloudflare DNS Credentials for Certbot
+# ========================================
+# This file contains Cloudflare API credentials for DNS-01 challenge
+# Required for wildcard SSL certificates (*.mikan.uz)
+# ========================================
+
+# INSTRUCTIONS:
+# 1. Go to Cloudflare Dashboard: https://dash.cloudflare.com/
+# 2. Navigate to: My Profile > API Tokens
+# 3. Create Token with permissions:
+#    - Zone:DNS:Edit (for all zones or specific zone)
+#    - Zone:Zone:Read
+# 4. Copy the token and paste below
+
+# Cloudflare API Token (recommended - more secure)
+dns_cloudflare_api_token = YOUR_CLOUDFLARE_API_TOKEN_HERE
+
+# OR use Global API Key (legacy method - less secure)
+# dns_cloudflare_email = your-email@example.com
+# dns_cloudflare_api_key = YOUR_CLOUDFLARE_GLOBAL_API_KEY
+
+# ========================================
+# Security Notes:
+# ========================================
+# - File permissions MUST be 600 (read/write for root only)
+# - Never commit this file to version control
+# - Store in /root/.secrets/cloudflare.ini on production server
+# ========================================
+
+# Setup commands:
+# mkdir -p /root/.secrets
+# cp cloudflare.ini.example /root/.secrets/cloudflare.ini
+# chmod 600 /root/.secrets/cloudflare.ini
+# nano /root/.secrets/cloudflare.ini  # Add your API token

@@ -1,7 +1,7 @@
 # Multi-Tenant JLPT (mikan.uz) – Django, Daphne, Celery, Redis, PostgreSQL
 # Celery workers start only after Postgres and Redis are ready.
 
-version: "3.8"
+version: '3.8'
 
 services:
   db:
@@ -14,9 +14,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - '5432:5432'
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-jlpt_mock_db}"]
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-jlpt_mock_db}',
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -26,11 +30,11 @@ services:
     image: redis:7-alpine
     container_name: jlpt_redis
     ports:
-      - "6379:6379"
+      - '6379:6379'
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -38,17 +42,13 @@ services:
   web:
     build: .
     container_name: jlpt_web
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py migrate_tenants --skip-public &&
-             python manage.py collectstatic --noinput --clear || true &&
-             gunicorn config.wsgi:application -c deployment/gunicorn.conf.py --bind 0.0.0.0:8000"
+    command: entrypoint.sh web
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
     ports:
-      - "8000:8000"
+      - '8000:8000'
     env_file: .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
@@ -63,7 +63,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/')"]
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -89,7 +95,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - '8001:8001'
 
   celery_worker:
     build: .

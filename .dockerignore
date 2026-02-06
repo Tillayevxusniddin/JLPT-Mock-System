@@ -1,0 +1,97 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+.env/
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+*.log
+
+# Static & Media (use S3 in production; keep out of image)
+/staticfiles
+/static
+/media
+
+# Environment variables (never include in image)
+.env
+.env.example
+.env.prod
+.env.prod.db
+
+# Version Control (no need in image)
+.git/
+.gitignore
+.gitattributes
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.vscode
+
+# Documentation (optional; reduce size)
+docs/
+*.md
+
+# Tests & coverage
+tests/
+.pytest_cache/
+htmlcov/
+coverage.xml
+test-results/
+
+# Temporary & build artifacts
+tmp/
+temp/
+*.tmp
+*.bak
+.cache/
+
+# Node (if using any frontend tooling)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Logs (will be volume-mounted in production)
+logs/
+/logs
+
+# Deployment & infrastructure as code (bake into image if needed, or reference from deployment/)
+# deployment/  # Comment this out if you need deployment/ in image

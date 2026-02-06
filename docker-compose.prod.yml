@@ -1,0 +1,413 @@
+# docker-compose.prod.yml
+# Production overrides for Multi-Tenant JLPT (mikan.uz)
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file OVERRIDES the base docker-compose.yml with production settings:
+# - Removes all public port exposure (except via reverse proxy)
+# - Adds PgBouncer for connection pooling
+# - Adds resource limits (CPU, memory)
+# - Configures graceful shutdown timeouts
+# - Uses unless-stopped restart policy
+#
+# Architecture:
+#   Internet → Nginx (port 80/443)
+#              ↓
+#             web:8000 (Gunicorn, no public access)
+#             daphne:8001 (WebSocket, no public access)
+#             ↓
+#          PgBouncer:6432 (connection pooling, internal only)
+#             ↓
+#          PostgreSQL:5432 (internal only, no public access)
+#             ↓
+#          Redis:6379 (internal only, no public access)
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # DATABASE & CACHE (Internal, No Public Access)
+  # ===========================================================================
+
+  db:
+    # Remove ports: makes it internal-only (no public access)
+    # Network: Only accessible from other containers via 'db' service name
+    ports: [] # Explicitly override to remove port 5432 from exposure
+    environment:
+      POSTGRES_DB: ${DB_NAME:-jlpt_mock_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?error} # REQUIRED: Fail if not set
+    restart: unless-stopped
+    # Resource limits to prevent runaway PostgreSQL consuming all server resources
+    deploy:
+      resources:
+        limits:
+          cpus: '2' # Maximum 2 CPU cores
+          memory: 4G # Maximum 4GB RAM
+        reservations:
+          cpus: '1' # Reserve at least 1 CPU core
+          memory: 2G # Reserve at least 2GB RAM
+    # PostgreSQL specific: disable fsync for faster test/CI (but keep for prod)
+    # command: postgres -c fsync=off  # Uncomment ONLY for test/CI environments
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  redis:
+    # Remove ports: makes it internal-only
+    ports: [] # Explicitly override to remove port 6379 from exposure
+    restart: unless-stopped
+    environment:
+      # Note: Redis Alpine doesn't support requirepass via environment
+      # See userlist.txt comment for Redis auth setup if needed
+      pass: ${REDIS_PASSWORD:?error} # REQUIRED: Fail if not set
+    deploy:
+      resources:
+        limits:
+          cpus: '1' # Maximum 1 CPU core
+          memory: 1G # Maximum 1GB RAM (cache should not balloon)
+        reservations:
+          cpus: '0.5' # Reserve half CPU
+          memory: 512M # Reserve 512MB
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # ===========================================================================
+  # PGBOUNCER: Connection Pool (Internal, No Public Access)
+  # ===========================================================================
+  #
+  # WHY PGBOUNCER FOR MULTI-TENANT ARCHITECTURE:
+  #
+  # Problem without PgBouncer:
+  # ───────────────────────────────────────────────────────────────────────
+  # Each Gunicorn worker creates a DB connection pool:
+  #   Workers per container = (CPU_COUNT * 2 + 1)
+  #   Let's say 9 workers × 5 web containers = 45 connections
+  #
+  # Daphne (WebSocket) creates persistent connections:
+  #   2000 concurrent users × 5 daphne containers = potentially 10,000 connections
+  #
+  # Celery workers create connections per task:
+  #   100 workers × 5 celery containers = 500+ connections at peak
+  #
+  # PostgreSQL connection limit: 200 by default
+  #   Problem: 45 + 10,000 + 500 = 10,545 connections >> 200 limit
+  #   Result: New connections get "FATAL: too many connections" errors
+  #
+  # Solution with PgBouncer:
+  # ───────────────────────────────────────────────────────────────────────
+  # PgBouncer acts as a connection pool:
+  #
+  #   [Web × 5]     (900 connections to pgbouncer)
+  #   [Daphne × 5]  (10,000 connections to pgbouncer)
+  #   [Celery × 5]  (500 connections to pgbouncer)
+  #        ↓
+  #    PgBouncer ◄── (pools 50 connections to PostgreSQL)
+  #        ↓
+  #    PostgreSQL (only sees ~50 connections, not 10,000+)
+  #
+  # Benefits:
+  # ✓ Limits total DB connections to a fixed pool (e.g., 50)
+  # ✓ Queues excess connections (waits for available slot)
+  # ✓ Prevents "too many connections" errors
+  # ✓ Reduces PostgreSQL memory (connection structs)
+  # ✓ Faster connection reuse (no SSL handshake overhead)
+  # ✓ Multi-tenant schemas: Each schema access reuses same connection
+  # ✓ Simplifies resource planning (know exactly how many DB conns needed)
+  #
+  # Key Metric:
+  #   Without PgBouncer: PostgreSQL sees N × M × W connections
+  #     (N services × M replicas × W workers/connections each)
+  #   With PgBouncer: PostgreSQL sees ~50 pooled connections
+  #
+  # This is CRITICAL for multi-tenant because:
+  #   - Each tenant schema requires same connection infrastructure
+  #   - Without pooling, each scale-up multiplies connection count
+  #   - With pooling, scale-up is mostly transparent (just queue longer)
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest # or build your own from pgbouncer:latest
+    container_name: jlpt_pgbouncer
+    ports: [] # Internal only, no public access
+    restart: unless-stopped
+    environment:
+      # PgBouncer configuration via environment variables
+      # See pgbouncer.ini for full configuration
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?error} # REQUIRED: Fail if not set
+      DB_HOST: db # Internal service name
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-jlpt_mock_db}
+      # Connection pooling settings
+      POOL_MODE: transaction # Reuse connections per transaction (good for Django)
+      # POOL_MODE options:
+      #   - session: One connection per client session (max isolation, less pooling)
+      #   - transaction: Reuse after each transaction (good balance)
+      #   - statement: Reuse after each statement (max pooling, limited compatibility)
+      MAX_DB_CONNECTIONS: 50 # Total connections to PostgreSQL
+      MAX_CLIENT_CONNECTIONS: 1000 # Allow up to 1000 client connections
+      DEFAULT_POOL_SIZE: 25 # Connections per database
+      MIN_POOL_SIZE: 10 # Minimum to keep open
+      RESERVE_POOL_SIZE: 5 # Extra slots for priority connections
+      RESERVE_POOL_TIMEOUT: 3 # Seconds to wait for reserve pool
+      QUERY_WAIT_TIMEOUT: 120 # Seconds to wait for query to complete
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5' # Lightweight proxy, minimal CPU
+          memory: 256M # Lightweight, minimal memory
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'pg_isready',
+          '-h',
+          'localhost',
+          '-p',
+          '6432',
+          '-U',
+          '${DB_USER:-postgres}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '3'
+    volumes:
+      # Mount pgbouncer configuration
+      - ./deployment/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./deployment/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+
+  # ===========================================================================
+  # WEB APPLICATION SERVICES (Internal, No Public Access)
+  # ===========================================================================
+
+  web:
+    # Remove public port exposure (port 8000)
+    # Nginx will reverse-proxy to http://web:8000
+    ports: [] # Override: remove port 8000 from external exposure
+
+    command: web # Uses entrypoint.sh
+
+    restart: unless-stopped
+
+    # Graceful shutdown: Allow 60s for exam submissions to complete
+    stop_grace_period: 60s
+
+    # Override environment to use PgBouncer instead of direct PostgreSQL
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: pgbouncer # Changed from 'db' to 'pgbouncer'
+      DB_PORT: 6432 # PgBouncer port instead of 5432
+      DB_USER: ${DB_USER:?error}
+      DB_PASSWORD: ${DB_PASSWORD:?error}
+      DB_NAME: ${DB_NAME:?error}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?error} # e.g., "localhost,api.mikan.uz"
+      DEBUG: 'false' # Always false in production
+
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    # Resource limits: Prevent single web container from consuming all CPU
+    deploy:
+      resources:
+        limits:
+          cpus: '2' # Maximum 2 CPU cores per container
+          memory: 2G # Maximum 2GB RAM per container
+        reservations:
+          cpus: '1' # Reserve 1 CPU core
+          memory: 1G # Reserve 1GB RAM
+
+    env_file: .env
+
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m' # Web logs can be large
+        max-file: '5'
+
+  daphne:
+    # Remove public port exposure (port 8001)
+    # Nginx will reverse-proxy WebSocket requests to http://daphne:8001/ws/
+    ports: [] # Override: remove port 8001 from external exposure
+
+    command: daphne # Uses entrypoint.sh
+
+    restart: unless-stopped
+
+    # Graceful shutdown: Allow time for WebSocket clients to reconnect
+    stop_grace_period: 30s
+
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: pgbouncer # Use PgBouncer
+      DB_PORT: 6432
+      DB_USER: ${DB_USER:?error}
+      DB_PASSWORD: ${DB_PASSWORD:?error}
+      DB_NAME: ${DB_NAME:?error}
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: 'false'
+
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1' # WebSocket server, less CPU intensive
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    env_file: .env
+
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m'
+        max-file: '5'
+
+  # ===========================================================================
+  # CELERY SERVICES (Internal, No Public Access)
+  # ===========================================================================
+
+  celery_worker:
+    # No ports to expose
+    ports: []
+
+    command: celery # Uses entrypoint.sh
+
+    restart: unless-stopped
+
+    # Graceful shutdown: Allow tasks to complete (30s default Celery timeout)
+    stop_grace_period: 45s
+
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: pgbouncer # Use PgBouncer
+      DB_PORT: 6432
+      DB_USER: ${DB_USER:?error}
+      DB_PASSWORD: ${DB_PASSWORD:?error}
+      DB_NAME: ${DB_NAME:?error}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DEBUG: 'false'
+
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    # Celery workers can be aggressive with CPU/memory
+    deploy:
+      resources:
+        limits:
+          cpus: '4' # Task workers, CPU intensive
+          memory: 2G # Can process large files, need memory
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    env_file: .env
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m'
+        max-file: '5'
+
+  celery_beat:
+    # No ports to expose
+    ports: []
+
+    command: beat # Uses entrypoint.sh
+
+    restart: unless-stopped
+
+    # Short shutdown grace (scheduled tasks can wait)
+    stop_grace_period: 10s
+
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: pgbouncer # Use PgBouncer
+      DB_PORT: 6432
+      DB_USER: ${DB_USER:?error}
+      DB_PASSWORD: ${DB_PASSWORD:?error}
+      DB_NAME: ${DB_NAME:?error}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DEBUG: 'false'
+
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    # Minimal resources (just scheduler, no heavy processing)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    env_file: .env
+
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '20m'
+        max-file: '3'
+
+  # ===========================================================================
+  # VOLUMES (shared storage)
+  # ===========================================================================
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  static_volume:
+    driver: local
+  media_volume:
+    driver: local
+
+# ===========================================================================
+# NETWORKS (Optional: explicit network for multi-stack isolation)
+# ===========================================================================
+# Uncomment if you want explicit control over container networking
+# networks:
+#   jlpt_network:
+#     driver: bridge
+#
+# Then add `networks: [jlpt_network]` to each service

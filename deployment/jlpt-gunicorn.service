@@ -1,25 +1,74 @@
 [Unit]
-Description=JLPT Gunicorn (mikan.uz API)
-After=network.target postgresql.service redis.service
+Description=JLPT Gunicorn Application Server
+Documentation=https://gunicorn.org/
+After=network.target docker.service
+Wants=jlpt-daphne.service
 
 [Service]
 Type=notify
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/mikan
-Environment="PATH=/var/www/mikan/venv/bin"
-EnvironmentFile=/var/www/mikan/.env
-Environment=DJANGO_SETTINGS_MODULE=config.settings.production
-# Optional: log to files. Create /var/www/mikan/logs and set:
-# Environment=GUNICORN_LOG_DIR=/var/www/mikan/logs
-ExecStart=/var/www/mikan/venv/bin/gunicorn config.wsgi:application \
-    --config /var/www/mikan/deployment/gunicorn.conf.py
-ExecReload=/bin/kill -s HUP $MAINPID
-KillMode=mixed
-TimeoutStopSec=5
-Restart=on-failure
-RestartSec=3
+WorkingDirectory=/app
+
+# ========================================
+# Security Hardening
+# ========================================
+ProtectSystem=full
+ProtectHome=true
 PrivateTmp=true
+NoNewPrivileges=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ========================================
+# Process Management
+# ========================================
+ExecStart=/usr/bin/docker exec jlpt_web python -m gunicorn \
+    config.wsgi:application \
+    -c deployment/gunicorn.conf.py \
+    --bind 0.0.0.0:8000 \
+    --timeout 120 \
+    --graceful-timeout 120
+
+ExecStop=/usr/bin/docker exec jlpt_web kill -TERM 1
+
+# Graceful shutdown: Allow 120 seconds for in-flight requests to complete
+TimeoutStopSec=120
+KillMode=mixed
+KillSignal=SIGTERM
+
+# ========================================
+# Restart Policy
+# ========================================
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=5
+
+# ========================================
+# Resource Limits
+# ========================================
+CPUQuota=200%
+CPUAccounting=true
+MemoryMax=2G
+MemoryAccounting=true
+LimitNOFILE=65536
+LimitNPROC=8192
+
+# ========================================
+# Logging
+# ========================================
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jlpt-gunicorn
+Environment="DJANGO_SETTINGS_MODULE=config.settings.production"
 
 [Install]
 WantedBy=multi-user.target

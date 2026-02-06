@@ -1,27 +1,85 @@
 [Unit]
-Description=JLPT Celery Worker
-After=network.target redis.service postgresql.service
+Description=JLPT Celery Worker Service
+Documentation=https://docs.celeryproject.io/
+After=network.target docker.service redis.service postgresql.service
+Wants=jlpt-celery-beat.service
 
 [Service]
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/mikan
-Environment="PATH=/var/www/mikan/venv/bin"
-EnvironmentFile=/var/www/mikan/.env
-Environment=DJANGO_SETTINGS_MODULE=config.settings.production
-ExecStart=/var/www/mikan/venv/bin/celery -A config worker \
-    --loglevel=info
-ExecStop=/bin/kill -TERM $MAINPID
-KillSignal=SIGTERM
+WorkingDirectory=/app
+
+# ========================================
+# Security Hardening
+# ========================================
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ========================================
+# Process Management - Celery Warm Shutdown
+# ========================================
+# --time-limit 3600: Hard timeout if task > 1 hour
+# --soft-time-limit 3540: Warn task at 59 min, allow graceful shutdown
+# --max-tasks-per-child 1000: Recycle worker after 1000 tasks (memory leak prevention)
+ExecStart=/usr/bin/docker exec jlpt_celery_worker celery \
+    -A config \
+    worker \
+    -l info \
+    --concurrency=4 \
+    --time-limit=3600 \
+    --soft-time-limit=3540 \
+    --max-tasks-per-child=1000
+
+# Graceful shutdown: Send SIGTERM to allow task completion
+ExecStop=/usr/bin/docker exec jlpt_celery_worker kill -TERM 1
+
+# Graceful shutdown: Allow 45 seconds for task completion
+TimeoutStopSec=45
 KillMode=mixed
+KillSignal=SIGTERM
+
+# ========================================
+# Restart Policy
+# ========================================
 Restart=on-failure
 RestartSec=10
-# Log to journal (default). For file logs, use:
-# ExecStart=... --logfile=/var/www/mikan/logs/celery_worker.log
+StartLimitInterval=600
+StartLimitBurst=5
+
+# ========================================
+# Resource Limits
+# ========================================
+# CPU: 4 cores (tasks are CPU-intensive: grading, analytics)
+CPUQuota=400%
+CPUAccounting=true
+
+# Memory: 2GB
+MemoryMax=2G
+MemoryAccounting=true
+
+# File descriptors
+LimitNOFILE=65536
+LimitNPROC=8192
+
+# ========================================
+# Logging
+# ========================================
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=jlpt-celery-worker
+Environment="DJANGO_SETTINGS_MODULE=config.settings.production"
 
 [Install]
 WantedBy=multi-user.target

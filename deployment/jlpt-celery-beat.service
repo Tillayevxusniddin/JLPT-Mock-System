@@ -1,25 +1,80 @@
 [Unit]
 Description=JLPT Celery Beat Scheduler
-After=network.target redis.service
+Documentation=https://docs.celeryproject.io/
+After=network.target docker.service redis.service postgresql.service
+Wants=jlpt-celery-worker.service
 
 [Service]
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/mikan
-Environment="PATH=/var/www/mikan/venv/bin"
-EnvironmentFile=/var/www/mikan/.env
-Environment=DJANGO_SETTINGS_MODULE=config.settings.production
-ExecStart=/var/www/mikan/venv/bin/celery -A config beat \
-    --loglevel=info
-ExecStop=/bin/kill -TERM $MAINPID
-KillSignal=SIGTERM
+WorkingDirectory=/app
+
+# ========================================
+# Security Hardening
+# ========================================
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ========================================
+# Process Management
+# ========================================
+# Beat scheduler: Schedules periodic tasks
+ExecStart=/usr/bin/docker exec jlpt_celery_beat celery \
+    -A config \
+    beat \
+    -l info \
+    --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+# Graceful shutdown: Beat doesn't need long to exit
+ExecStop=/usr/bin/docker exec jlpt_celery_beat kill -TERM 1
+
+# Graceful shutdown: Allow 10 seconds (quick shutdown, doesn't hold state)
+TimeoutStopSec=10
 KillMode=mixed
+KillSignal=SIGTERM
+
+# ========================================
+# Restart Policy
+# ========================================
 Restart=on-failure
 RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=3
+
+# ========================================
+# Resource Limits
+# ========================================
+# CPU: 0.5 cores (lightweight scheduler)
+CPUQuota=50%
+CPUAccounting=true
+
+# Memory: 512MB (minimal)
+MemoryMax=512M
+MemoryAccounting=true
+
+# File descriptors
+LimitNOFILE=8192
+LimitNPROC=1024
+
+# ========================================
+# Logging
+# ========================================
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=jlpt-celery-beat
+Environment="DJANGO_SETTINGS_MODULE=config.settings.production"
 
 [Install]
 WantedBy=multi-user.target

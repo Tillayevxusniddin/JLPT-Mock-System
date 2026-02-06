@@ -1,0 +1,143 @@
+# userlist.txt – PgBouncer User Authentication
+#
+# Format:
+#   "username" "password"
+#   or for MD5 hashing:
+#   "username" "md5<hash>"
+#
+# Passwords must match PostgreSQL users.
+# This file is used by PgBouncer to authenticate incoming connections.
+#
+# IMPORTANT: Keep this file secure (readable only by pgbouncer user)
+#   chmod 600 userlist.txt
+#
+# For Docker Compose:
+#   - Mount this file as read-only: volumes: [./deployment/userlist.txt:/etc/pgbouncer/userlist.txt:ro]
+#   - Use :?error in docker-compose.prod.yml to require POSTGRES_PASSWORD to be set
+#   - Export POSTGRES_PASSWORD before running: export POSTGRES_PASSWORD=<secure-password>
+
+# Main PostgreSQL user (same as POSTGRES_USER and POSTGRES_PASSWORD from .env)
+"postgres" "${POSTGRES_PASSWORD}"
+
+# Optional: Additional read-only user for analytics/reporting
+# "analytics_user" "analytics_password"
+
+# Optional: Admin user for PgBouncer administration
+# "pgbouncer" "pgbouncer_admin_password"
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+#
+# 1. Environment Variable Substitution:
+#    ─────────────────────────────────
+#    The ${POSTGRES_PASSWORD} will be replaced by your deployment script.
+#    In docker-compose.prod.yml, use:
+#      environment:
+#        DB_PASSWORD: ${POSTGRES_PASSWORD:?error}
+#    This forces the variable to be set (fails if not provided).
+#
+# 2. Password Security:
+#    ────────────────
+#    ✓ Plain text (as shown) – OK for development
+#    ✓ MD5 hashing – Better for production
+#    ✓ SCRAM-SHA-256 – Not yet supported by PgBouncer (use pgBouncer 1.18+)
+#
+#    To use MD5:
+#      1. Generate hash: echo -n "password" | md5sum
+#      2. Prepend "md5": "postgres" "md5<32-hex-chars>"
+#      3. Set auth_type = md5 in pgbouncer.ini
+#
+# 3. User Roles in PostgreSQL:
+#    ─────────────────────────
+#    The users listed here must exist in PostgreSQL:
+#      CREATE ROLE postgres WITH LOGIN PASSWORD 'password';
+#      GRANT CONNECT ON DATABASE jlpt_mock_db TO postgres;
+#      GRANT USAGE ON SCHEMA public TO postgres;
+#    (PostgreSQL 'postgres' user already exists by default)
+#
+# 4. PgBouncer vs PostgreSQL Passwords:
+#    ──────────────────────────────────
+#    PgBouncer.userlist.txt:  Authenticates clients → PgBouncer
+#    PostgreSQL pg_hba.conf:  Authenticates PgBouncer → PostgreSQL
+#
+#    Flow:
+#      Client → PgBouncer (checks userlist.txt)
+#             → PostgreSQL (checks pg_hba.conf)
+#
+#    PgBouncer forwards credentials to PostgreSQL automatically.
+#
+# 5. Docker Secret Management:
+#    ────────────────────────
+#    For production, use Docker Secrets instead of environment variables:
+#
+#      docker secret create postgres_password -  <<< "securepassword123"
+#
+#    Then in docker-compose:
+#      secrets:
+#        postgres_password:
+#          external: true
+#      services:
+#        pgbouncer:
+#          secrets: [postgres_password]
+#          environment:
+#            DB_PASSWORD_FILE: /run/secrets/postgres_password
+#
+#    And modify the startup script to read from _FILE:
+#      if [ -f $DB_PASSWORD_FILE ]; then
+#        DB_PASSWORD=$(cat $DB_PASSWORD_FILE)
+#      fi
+#
+# 6. Kubernetes Secret Integration:
+#    ──────────────────────────────
+#    kubectl create secret generic pgbouncer-password \
+#      --from-literal=password=securepassword123
+#
+#    Then mount in pod and pass to PgBouncer via environment.
+#
+# 7. Multi-Database Setup (if using multiple databases):
+#    ───────────────────────────────────────────────────
+#    If you later add read replicas or separate databases:
+#      "analytics_db_user" "analytics_password"
+#      "reports_db_user" "reports_password"
+#
+#    Then in pgbouncer.ini [databases] section:
+#      [databases]
+#      jlpt_mock_db = "host=db port=5432 user=postgres password=... dbname=jlpt_mock_db"
+#      analytics_db = "host=db-replica port=5432 user=analytics_db_user password=... dbname=analytics"
+#
+# ==============================================================================
+# PRODUCTION CHECKLIST
+# ==============================================================================
+#
+# Before deploying to production:
+#
+# ✓ Set POSTGRES_PASSWORD to a strong, random value:
+#   $ openssl rand -base64 32
+#   (output example: "aBcDeFg1HiJkLmNoPqRsT+UvWxYz0123456789=="
+#
+# ✓ Store password in secure location:
+#   - Docker Secrets (recommended)
+#   - Vault / AWS Secrets Manager
+#   - 1Password / LastPass
+#   - Encrypted .env.prod file (commit to git with encryption)
+#
+# ✓ Restrict file permissions:
+#   chmod 600 /deployment/userlist.txt
+#   chown pgbouncer:pgbouncer /deployment/userlist.txt
+#
+# ✓ Enable TLS/SSL:
+#   - In pgbouncer.ini: server_tls_sslmode = require
+#   - Provides encryption between PgBouncer and PostgreSQL
+#   - Provides encryption between apps and PgBouncer (optional, use Nginx TLS)
+#
+# ✓ Monitor PgBouncer statistics:
+#   - Set log_stats = 1 in pgbouncer.ini
+#   - Review logs periodically for pool exhaustion warnings
+#
+# ✓ Capacity planning:
+#   - Reserve at least 10-20% headroom on max_db_connections
+#   - Monitor peak usage: docker exec jlpt_pgbouncer psql -p 6432 -U postgres pgbouncer -c "SHOW STATS"
+#   - Adjust max_db_connections if you see "Connection pool exhausted" in logs
+#
+# ==============================================================================
