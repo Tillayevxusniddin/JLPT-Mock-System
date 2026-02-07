@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import ExamAssignment, HomeworkAssignment
 from .services import validate_assignment_payload, validate_user_ids_belong_to_tenant
 from apps.groups.models import Group
+from apps.mock_tests.models import MockTest
 from apps.core.serializers import UserSummarySerializer
 
 
@@ -23,7 +24,7 @@ class GroupSummarySerializer(serializers.ModelSerializer):
 class ExamAssignmentSerializer(serializers.ModelSerializer):
     """Serializer for ExamAssignment model."""
     mock_test = serializers.PrimaryKeyRelatedField(
-        queryset=None,  # Set in __init__
+        queryset=MockTest.objects.none(),  # Set in __init__
         required=True,
         help_text="MockTest (must be PUBLISHED)",
     )

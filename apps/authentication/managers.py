@@ -9,14 +9,13 @@ User manager that excludes soft-deleted users from all queries.
 """
 from django.contrib.auth.models import BaseUserManager
 
-from apps.core.managers import SoftDeleteManager
+from apps.core.managers import SoftDeleteManager, SoftDeleteQuerySet
 
 
 class SoftDeleteUserManager(BaseUserManager):
     def get_queryset(self):
-        return SoftDeleteManager(self.model, using=self._db).filter(
-            deleted_at__isnull=True
-        )
+        base = SoftDeleteQuerySet(self.model, using=self._db)
+        return base.filter(deleted_at__isnull=True)
 
     def _create_user(self, email, password=None, **extra_fields):
         if not email:

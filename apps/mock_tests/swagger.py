@@ -259,7 +259,7 @@ test_section_viewset_schema = extend_schema_view(
         summary="List sections",
         description=SECTION_LIST_DESC,
         parameters=[
-            OpenApiParameter(name="mock_test", type=str, format="uuid", description="Filter by mock test ID"),
+            OpenApiParameter(name="mock_test", type=str, description="Filter by mock test ID"),
             OpenApiParameter(name="ordering", type=str),
         ],
         responses={200: TestSectionSerializer(many=True), 401: RESP_401, 403: RESP_403},
@@ -361,8 +361,8 @@ question_group_viewset_schema = extend_schema_view(
         summary="List question groups",
         description=MONDAI_LIST_DESC,
         parameters=[
-            OpenApiParameter(name="section", type=str, format="uuid"),
-            OpenApiParameter(name="mock_test", type=str, format="uuid"),
+            OpenApiParameter(name="section", type=str, ),
+            OpenApiParameter(name="mock_test", type=str, ),
             OpenApiParameter(name="ordering", type=str),
         ],
         responses={200: QuestionGroupSerializer(many=True), 401: RESP_401, 403: RESP_403},
@@ -481,9 +481,9 @@ question_viewset_schema = extend_schema_view(
         summary="List questions",
         description=QUESTION_LIST_DESC,
         parameters=[
-            OpenApiParameter(name="group", type=str, format="uuid"),
-            OpenApiParameter(name="section", type=str, format="uuid"),
-            OpenApiParameter(name="mock_test", type=str, format="uuid"),
+            OpenApiParameter(name="group", type=str, ),
+            OpenApiParameter(name="section", type=str, ),
+            OpenApiParameter(name="mock_test", type=str, ),
             OpenApiParameter(name="ordering", type=str),
         ],
         responses={200: QuestionSerializer(many=True), 401: RESP_401, 403: RESP_403},
@@ -696,7 +696,7 @@ quiz_question_viewset_schema = extend_schema_view(
         summary="List quiz questions",
         description=QUIZ_QUESTION_LIST_DESC,
         parameters=[
-            OpenApiParameter(name="quiz", type=str, format="uuid"),
+            OpenApiParameter(name="quiz", type=str, ),
             OpenApiParameter(name="ordering", type=str),
         ],
         responses={200: QuizQuestionSerializer(many=True), 401: RESP_401, 403: RESP_403},

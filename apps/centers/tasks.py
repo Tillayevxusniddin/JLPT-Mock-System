@@ -306,3 +306,103 @@ def hard_delete_center(self, center_id):
         logger.error(f"❌ HARD DELETE FAILED: {str(e)}", exc_info=True)
         # 5 minutdan keyin qayta urinib ko'rish
         raise self.retry(exc=e, countdown=300)
+
+
+@shared_task(bind=True)
+def check_and_suspend_expired_subscriptions(self):
+    """
+    Periodic task to check for expired FREE subscriptions and suspend centers.
+    Should be run daily via Celery Beat.
+    
+    This task:
+    1. Finds all active FREE subscriptions that have expired
+    2. Marks the subscription as inactive
+    3. Changes center status to SUSPENDED
+    4. (Optional) Sends notification to center admins
+    """
+    from django.utils import timezone
+    from apps.centers.models import Center, Subscription
+    from django.db import transaction
+    
+    logger.info("🔍 Checking for expired subscriptions...")
+    
+    try:
+        now = timezone.now()
+        
+        # Find expired FREE subscriptions that are still active
+        expired_subscriptions = Subscription.objects.filter(
+            plan=Subscription.Plan.FREE,
+            is_active=True,
+            ends_at__lte=now
+        ).select_related('center')
+        
+        suspended_count = 0
+        
+        for subscription in expired_subscriptions:
+            try:
+                with transaction.atomic():
+                    # Mark subscription as inactive
+                    subscription.is_active = False
+                    subscription.save(update_fields=['is_active', 'updated_at'])
+                    
+                    # Suspend the center
+                    center = subscription.center
+                    if center.status != Center.Status.SUSPENDED:
+                        center.status = Center.Status.SUSPENDED
+                        center.save(update_fields=['status', 'updated_at'])
+                        
+                        logger.info(
+                            f"⏸️ Suspended center: {center.name} (FREE trial expired)",
+                            extra={
+                                'center_id': center.id,
+                                'center_name': center.name,
+                                'subscription_id': subscription.id,
+                                'expired_at': subscription.ends_at
+                            }
+                        )
+                        
+                        suspended_count += 1
+                        
+                        # Optional: Send notification to center admins
+                        try:
+                            from apps.notifications.signals import _create_notification
+                            from apps.authentication.models import User
+                            from django.apps import apps
+                            
+                            Notification = apps.get_model("notifications", "Notification")
+                            
+                            # Get all center admins for this center
+                            admins = User.objects.filter(
+                                center_id=center.id,
+                                role=User.Role.CENTERADMIN,
+                                is_active=True
+                            )
+                            
+                            for admin in admins:
+                                _create_notification(
+                                    center=center,
+                                    user_id=admin.id,
+                                    message=f"Your FREE trial has expired. Please contact support to upgrade your subscription.",
+                                    notification_type=Notification.NotificationType.SYSTEM,
+                                )
+                        except Exception as e:
+                            logger.warning(f"Failed to send suspension notification: {e}")
+                    
+            except Exception as e:
+                logger.error(
+                    f"❌ Failed to suspend center {subscription.center_id}: {str(e)}",
+                    exc_info=True
+                )
+                continue
+        
+        logger.info(f"✅ Subscription check complete. Suspended {suspended_count} centers.")
+        
+        return {
+            'status': 'success',
+            'suspended_count': suspended_count,
+            'checked_at': now.isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to check expired subscriptions: {str(e)}", exc_info=True)
+        raise self.retry(exc=e, countdown=3600)  # Retry after 1 hour

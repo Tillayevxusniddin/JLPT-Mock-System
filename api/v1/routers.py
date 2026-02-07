@@ -6,6 +6,7 @@ from apps.centers.views import (
     OwnerCenterAdminViewSet,
     CenterAdminCenterViewSet,
     OwnerContactRequestViewSet,
+    OwnerSubscriptionViewSet,
 )
 from apps.groups.views import GroupViewSet, GroupMembershipViewSet
 from apps.materials.views import MaterialViewSet
@@ -44,6 +45,11 @@ api_router.register(
     r"owner-contact-requests",
     OwnerContactRequestViewSet,
     basename="owner-contact-requests",
+)
+api_router.register(
+    r"owner-subscriptions",
+    OwnerSubscriptionViewSet,
+    basename="owner-subscriptions",
 )
 
 # Groups

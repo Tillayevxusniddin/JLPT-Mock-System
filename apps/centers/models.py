@@ -64,8 +64,8 @@ class Center(PublicBaseModel):
     )
     
     trial_ends_at = models.DateTimeField('trial ends at', null=True, blank=True)
-    subscription_starts_at = models.DateTimeField('subscription starts at', null=True, blank=True)
-    subscription_ends_at = models.DateTimeField('subscription ends at', null=True, blank=True)
+    
+    # Note: subscription_starts_at and subscription_ends_at moved to Subscription model
     
     # TODO: Features
     # features = models.JSONField('enabled features', default=dict, blank=True)
@@ -233,6 +233,10 @@ class Subscription(PublicBaseModel):
     
     next_billing_date = models.DateField(null=True, blank=True)
     
+    # Subscription period tracking
+    starts_at = models.DateTimeField('subscription starts at', null=True, blank=True)
+    ends_at = models.DateTimeField('subscription ends at', null=True, blank=True)
+    
     is_active = models.BooleanField(default=True)
     auto_renew = models.BooleanField(default=True)
     
@@ -243,6 +247,21 @@ class Subscription(PublicBaseModel):
     
     def __str__(self):
         return f"{self.center.name} - {self.get_plan_display()}"
+    
+    @property
+    def is_expired(self):
+        """Check if subscription has expired."""
+        if self.ends_at and timezone.now() > self.ends_at:
+            return True
+        return False
+    
+    @property
+    def days_remaining(self):
+        """Calculate days remaining in subscription."""
+        if not self.ends_at:
+            return None
+        delta = self.ends_at - timezone.now()
+        return max(0, delta.days)
 
 class Invitation(PublicBaseModel):
 

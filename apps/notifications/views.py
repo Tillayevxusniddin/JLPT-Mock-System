@@ -5,6 +5,7 @@ are documented in apps/notifications/swagger.py.
 """
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status, mixins
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import Notification

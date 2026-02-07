@@ -276,7 +276,7 @@ group_membership_viewset_schema = extend_schema_view(
         summary="List memberships",
         description=MEMBERSHIP_LIST_DESCRIPTION,
         parameters=[
-            OpenApiParameter(name="group_id", type=str, format="uuid", description="Filter by group UUID"),
+            OpenApiParameter(name="group_id", type=str, description="Filter by group UUID"),
             OpenApiParameter(name="user_id", type=int, description="Filter by user id"),
             OpenApiParameter(name="role_in_group", type=str, enum=["STUDENT", "TEACHER"], description="Filter by role in group"),
             OpenApiParameter(name="ordering", type=str, description="e.g. -created_at, role_in_group"),

@@ -44,6 +44,9 @@ from apps.centers.serializers import (
     InvitationDetailSerializer,
     OwnerCenterListSerializer,
     OwnerCenterSerializer,
+    SubscriptionSerializer,
+    SubscriptionDetailSerializer,
+    SubscriptionUpdateSerializer,
 )
 
 # -----------------------------------------------------------------------------
@@ -620,4 +623,149 @@ guest_upgrade_schema = extend_schema(
             request_only=True,
         ),
     ],
+)
+
+
+# =============================================================================
+# Owner – Subscriptions
+# =============================================================================
+
+OWNER_SUBSCRIPTION_VIEWSET_DESCRIPTION = """
+**Owner only.** Manage subscriptions for all centers.
+
+Subscription lifecycle:
+- **FREE plan:** Created automatically when a center is created. Lasts 2 months, then center is auto-suspended.
+- **BASIC / PRO / ENTERPRISE:** Owner manually upgrades centers from FREE or SUSPENDED status.
+- **Auto-suspension:** A daily Celery task checks for expired FREE subscriptions and suspends centers automatically.
+
+Owner can:
+- List all subscriptions with filtering by plan and status
+- View detailed subscription information
+- Upgrade/downgrade subscription plans (PATCH /owner-subscriptions/{id}/ or POST /owner-subscriptions/{id}/upgrade/)
+
+Note: Payment integration is not yet implemented. This is manual subscription management for MVP.
+"""
+
+owner_subscription_viewset_schema = extend_schema_view(
+    list=extend_schema(
+        tags=["Owner – Centers / Admins / Requests"],
+        summary="List all subscriptions",
+        description="**Owner only.** List all center subscriptions with filtering options.",
+        responses={
+            200: SubscriptionDetailSerializer(many=True),
+            401: RESP_401,
+            403: RESP_403,
+        },
+        parameters=[
+            OpenApiParameter(name="plan", description="Filter by plan (FREE, BASIC, PRO, ENTERPRISE)"),
+            OpenApiParameter(name="is_active", description="Filter by active status (true/false)"),
+            OpenApiParameter(name="search", description="Search by center name"),
+        ],
+    ),
+    retrieve=extend_schema(
+        tags=["Owner – Centers / Admins / Requests"],
+        summary="Get subscription details",
+        description="**Owner only.** Get detailed information about a specific subscription.",
+        responses={
+            200: SubscriptionDetailSerializer,
+            401: RESP_401,
+            403: RESP_403,
+            404: RESP_404,
+        },
+    ),
+    partial_update=extend_schema(
+        tags=["Owner – Centers / Admins / Requests"],
+        summary="Update subscription plan",
+        description="**Owner only.** Update subscription plan. Only `plan` field can be changed.",
+        request=SubscriptionUpdateSerializer,
+        responses={
+            200: SubscriptionDetailSerializer,
+            400: RESP_400,
+            401: RESP_401,
+            403: RESP_403,
+            404: RESP_404,
+        },
+        examples=[
+            OpenApiExample(
+                "Upgrade to BASIC",
+                value={"plan": "BASIC"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Upgrade to PRO",
+                value={"plan": "PRO"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Upgrade to ENTERPRISE",
+                value={"plan": "ENTERPRISE"},
+                request_only=True,
+            ),
+        ],
+    ),
+    upgrade=extend_schema(
+        tags=["Owner – Centers / Admins / Requests"],
+        summary="Upgrade subscription (convenience endpoint)",
+        description="**Owner only.** Convenience endpoint to upgrade a subscription plan.",
+        request=SubscriptionUpdateSerializer,
+        responses={
+            200: OpenApiResponse(
+                description="Subscription upgraded successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success",
+                        value={
+                            "detail": "Subscription upgraded to Professional",
+                            "subscription": {
+                                "id": 1,
+                                "center_id": 1,
+                                "center_name": "Tokyo Language Center",
+                                "plan": "PRO",
+                                "plan_display": "Professional",
+                                "price": "79.99",
+                                "currency": "USD",
+                                "is_active": True,
+                            }
+                        },
+                        response_only=True,
+                    ),
+                ],
+            ),
+            400: RESP_400,
+            401: RESP_401,
+            403: RESP_403,
+            404: RESP_404,
+        },
+    ),
+)
+
+
+# =============================================================================
+# Center Admin – Subscription Detail
+# =============================================================================
+
+CENTER_ADMIN_SUBSCRIPTION_DESCRIPTION = """
+**Center Admin only.** View your center's subscription details.
+
+This endpoint is **read-only**. Center admins cannot change their subscription plan.
+To upgrade, they must contact the platform owner.
+
+Returns:
+- Current plan (FREE, BASIC, PRO, ENTERPRISE)
+- Pricing and billing information
+- Subscription expiry date
+- Days remaining in current subscription
+- Active status
+"""
+
+center_admin_subscription_detail_schema = extend_schema(
+    tags=["Center Admin – Invitations / Profile / Guests"],
+    summary="Get my center's subscription",
+    description=CENTER_ADMIN_SUBSCRIPTION_DESCRIPTION,
+    responses={
+        200: SubscriptionSerializer,
+        401: RESP_401,
+        403: OpenApiResponse(description="Only CENTER_ADMIN can view subscription."),
+        404: OpenApiResponse(description="No subscription found for your center."),
+    },
 )

@@ -46,7 +46,12 @@ def get_user_groups_from_tenant(user):
             return []
 
         with schema_context(schema_name):
+            from django.db import connection
             from apps.groups.models import GroupMembership
+
+            table_name = GroupMembership._meta.db_table
+            if table_name not in connection.introspection.table_names():
+                return []
 
             memberships = GroupMembership.objects.filter(user_id=user.id).values(
                 "group__id", "group__name", "role_in_group"
@@ -84,6 +89,12 @@ def get_my_groups_batch(users):
             continue
         user_ids_in_center = [u.id for u in users if getattr(u, "center_id") == center_id]
         with schema_context(schema_name):
+            from django.db import connection
+
+            table_name = GroupMembership._meta.db_table
+            if table_name not in connection.introspection.table_names():
+                continue
+
             memberships = GroupMembership.objects.filter(
                 user_id__in=user_ids_in_center
             ).values("user_id", "group__id", "group__name", "role_in_group")
@@ -200,7 +211,8 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id", "email", "first_name", "last_name", "avatar", 
+            "id", "email", "first_name", "last_name", "avatar",
+            "bio", "address", "city", "emergency_contact_phone",
             "role", "center", "center_info",
             "my_groups", "is_approved", "created_at", "updated_at"
         ]
@@ -220,9 +232,14 @@ class UserSerializer(serializers.ModelSerializer):
             from apps.centers.models import Center
 
             def _get():
-                return Center.objects.filter(id=obj.center_id).values(
-                    "id", "name", "is_active"
-                ).first()
+                center = Center.objects.filter(id=obj.center_id).first()
+                if not center:
+                    return None
+                return {
+                    "id": center.id,
+                    "name": center.name,
+                    "is_active": center.is_active,
+                }
 
             return with_public_schema(_get)
         except Exception:
@@ -429,11 +446,14 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         frontend_base = getattr(settings, "FRONTEND_URL_BASE", "http://localhost:3000")
         reset_url = f"{frontend_base}/auth/forgot-password/password/?uid={uidb64}&token={token}"
         
-        # Render email template
-        html_message = render_to_string("email/password_reset_email.html", {
-            "user": user,
-            "reset_url": reset_url,
-        })
+        # Render email template (fallback to plain text if missing)
+        try:
+            html_message = render_to_string("email/password_reset_email.html", {
+                "user": user,
+                "reset_url": reset_url,
+            })
+        except Exception:
+            html_message = None
         
         # Send email
         try:

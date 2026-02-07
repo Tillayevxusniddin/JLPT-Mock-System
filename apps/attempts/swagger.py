@@ -124,8 +124,8 @@ submission_viewset_schema = extend_schema_view(
             "STUDENT/GUEST: own only. **Performance:** student_display is batch-fetched via user_map (public schema)."
         ),
         parameters=[
-            OpenApiParameter(name="exam_assignment_id", type=str, format="uuid"),
-            OpenApiParameter(name="homework_assignment_id", type=str, format="uuid"),
+            OpenApiParameter(name="exam_assignment_id", type=str, ),
+            OpenApiParameter(name="homework_assignment_id", type=str, ),
             OpenApiParameter(name="ordering", type=str),
         ],
         responses={200: SubmissionSerializer(many=True), 401: RESP_401, 403: RESP_403},
@@ -260,7 +260,7 @@ submission_viewset_schema = extend_schema_view(
             "GET student's own exam result. Only if **ExamAssignment.is_published** is True. "
             "Includes time_taken_seconds (completed_at − started_at) and percentage for dashboard."
         ),
-        parameters=[OpenApiParameter(name="exam_assignment_id", type=str, format="uuid", required=True)],
+        parameters=[OpenApiParameter(name="exam_assignment_id", type=str, required=True)],
         responses={
             200: OpenApiResponse(
                 description="submission (score, results, time_taken_seconds, percentage) if published.",
@@ -448,7 +448,7 @@ submission_viewset_schema = extend_schema_view(
             "Each item includes time_taken_seconds (completed_at − started_at). "
             "results included per item only if show_results_immediately is True."
         ),
-        parameters=[OpenApiParameter(name="homework_assignment_id", type=str, format="uuid", required=True)],
+        parameters=[OpenApiParameter(name="homework_assignment_id", type=str, required=True)],
         responses={
             200: OpenApiResponse(
                 description="homework_id, homework_title, show_results_immediately, submissions (score, time_taken_seconds, results if shown).",

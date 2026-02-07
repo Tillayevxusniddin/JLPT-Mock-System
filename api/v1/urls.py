@@ -27,6 +27,7 @@ from apps.centers.views import (
     ContactRequestCreateView,
     GuestListView,
     GuestUpgradeView,
+    CenterAdminSubscriptionDetailView,
 )
 from .routers import api_router
 
@@ -124,6 +125,13 @@ urlpatterns = [
         "guests/upgrade/",
         GuestUpgradeView.as_view(),
         name="guests-upgrade",
+    ),
+    
+    # Subscriptions
+    path(
+        "subscriptions/my-subscription/",
+        CenterAdminSubscriptionDetailView.as_view(),
+        name="my-subscription",
     ),
 ]
 

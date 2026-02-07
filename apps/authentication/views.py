@@ -281,12 +281,29 @@ class UserAvatarUploadView(generics.UpdateAPIView):
                 {"avatar": ["No avatar file provided."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        file_obj = request.FILES["avatar"]
+        try:
+            from PIL import Image, UnidentifiedImageError
+
+            image = Image.open(file_obj)
+            image.verify()
+            file_obj.seek(0)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return Response(
+                {"avatar": ["Invalid image file."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if user.avatar:
             try:
                 user.avatar.delete(save=False)
             except Exception as e:
                 logger.exception("Failed to delete avatar for user %s: %s", user.id, e)
-        user.avatar = request.FILES["avatar"]
+        user.avatar = file_obj
         user.save(update_fields=["avatar"])
+        return Response(UserSerializer(user).data)
+
+    def post(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
         serializer = self.get_serializer(user)
         return Response(serializer.data, status=status.HTTP_200_OK)

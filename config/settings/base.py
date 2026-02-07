@@ -162,13 +162,19 @@ CHANNEL_LAYERS = {
         "CONFIG": {"hosts": [env("REDIS_URL", default="redis://localhost:6379/0")]},
     }
 }
-
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=env("REDIS_URL", default="redis://localhost:6379/0"))
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
 CELERY_TIMEZONE = TIME_ZONE
 
-#TODO: Add tasks to the schedule
-CELERY_BEAT_SCHEDULE={}
+# Celery Beat Schedule for periodic tasks
+CELERY_BEAT_SCHEDULE = {
+    'check-expired-subscriptions-daily': {
+        'task': 'apps.centers.tasks.check_and_suspend_expired_subscriptions',
+        'schedule': 86400.0,  # Run every 24 hours (in seconds)
+        # Alternatively, use crontab for specific times:
+        # 'schedule': crontab(hour=2, minute=0),  # Run at 2 AM daily
+    },
+}
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB

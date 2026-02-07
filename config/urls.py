@@ -34,6 +34,7 @@ class TenantAwareSpectacularAPIView(SpectacularAPIView):
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include("api.v1.urls")),
+    path("api/v1/auth/", include(("api.v1.auth_urls", "auth"), namespace="auth")),
 
     path("api/schema/", csrf_exempt(TenantAwareSpectacularAPIView.as_view()), name="schema"),
     path(

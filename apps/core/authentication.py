@@ -5,6 +5,7 @@ user's tenant schema. Must run after TenantMiddleware has reset to public.
 """
 import logging
 
+from django.conf import settings
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import (
     JWTAuthentication as BaseJWTAuthentication,
@@ -58,8 +59,9 @@ class TenantAwareJWTAuthentication(BaseJWTAuthentication):
             return (user, token)
 
         self._check_center_ready(center, center_name)
-        if not schema_ready(schema_name):
-            self._raise_not_ready("SCHEMA_NOT_READY", center_name)
+        if not getattr(settings, "SKIP_SCHEMA_READY_CHECK", False):
+            if not schema_ready(schema_name):
+                self._raise_not_ready("SCHEMA_NOT_READY", center_name)
 
         try:
             set_tenant_schema(schema_name)

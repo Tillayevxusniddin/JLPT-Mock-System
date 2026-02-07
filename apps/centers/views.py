@@ -28,6 +28,9 @@ from apps.centers.serializers import (
     InvitationDetailSerializer,
     OwnerCenterListSerializer,
     OwnerCenterSerializer,
+    SubscriptionSerializer,
+    SubscriptionDetailSerializer,
+    SubscriptionUpdateSerializer,
 )
 from apps.centers.swagger import (
     center_admin_center_viewset_schema,
@@ -43,16 +46,19 @@ from apps.centers.swagger import (
     owner_center_admin_viewset_schema,
     owner_center_viewset_schema,
     owner_contact_request_viewset_schema,
+    owner_subscription_viewset_schema,
+    center_admin_subscription_detail_schema,
 )
 from apps.core.permissions import IsCenterAdmin, IsOwner
 from apps.core.tenant_utils import set_public_schema
 
 try:
-    from apps.centers.models import Center, ContactRequest, Invitation
+    from apps.centers.models import Center, ContactRequest, Invitation, Subscription
 except Exception:  # pragma: no cover
     Center = None
     ContactRequest = None
     Invitation = None
+    Subscription = None
 
 
 # ---- Invitations (Center Admin) ----
@@ -179,11 +185,11 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
             return (
                 Center.objects.all()
                 .annotate(
-                    teacher_count=Count("user_set", filter=Q(user_set__role=User.Role.TEACHER))
+                    teacher_count=Count("user", filter=Q(user__role=User.Role.TEACHER))
                 )
                 .prefetch_related(
                     Prefetch(
-                        "user_set",
+                        "user",
                         User.objects.filter(role=User.Role.CENTERADMIN).only(
                             "id", "email", "first_name", "last_name", "center_id"
                         ),
@@ -469,3 +475,93 @@ class GuestUpgradeView(generics.GenericAPIView):
             "detail": f"Guest user '{user_name}' has been upgraded to STUDENT.",
             "user": UserSerializer(user).data
         }, status=status.HTTP_200_OK)
+
+
+# ---- Subscriptions ----
+
+
+@owner_subscription_viewset_schema
+class OwnerSubscriptionViewSet(viewsets.ModelViewSet):
+    """
+    Owner can view and manage all subscriptions.
+    Main use case: Upgrade centers from FREE to BASIC/PRO/ENTERPRISE.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['plan', 'is_active']
+    search_fields = ['center__name']
+    ordering_fields = ['created_at', 'ends_at']
+    ordering = ['-created_at']
+    http_method_names = ['get', 'patch', 'head', 'options']
+    
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Subscription.objects.none()
+        
+        set_public_schema()
+        return Subscription.objects.select_related('center').all().order_by('-created_at')
+    
+    def get_serializer_class(self):
+        if self.action in ['update', 'partial_update']:
+            return SubscriptionUpdateSerializer
+        return SubscriptionDetailSerializer
+    
+    def list(self, request, *args, **kwargs):
+        """List all subscriptions."""
+        return super().list(request, *args, **kwargs)
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Get detailed subscription information."""
+        return super().retrieve(request, *args, **kwargs)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """
+        Update subscription plan.
+        Owner can upgrade/downgrade any center's subscription.
+        """
+        return super().partial_update(request, *args, **kwargs)
+    
+    @action(detail=True, methods=['post'])
+    def upgrade(self, request, pk=None):
+        """
+        Convenience endpoint to upgrade a subscription plan.
+        Expected payload: {"plan": "BASIC"/"PRO"/"ENTERPRISE"}
+        """
+        subscription = self.get_object()
+        serializer = SubscriptionUpdateSerializer(subscription, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        subscription = serializer.save()
+        
+        output_serializer = SubscriptionDetailSerializer(subscription)
+        return Response({
+            "detail": f"Subscription upgraded to {subscription.get_plan_display()}",
+            "subscription": output_serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+@center_admin_subscription_detail_schema
+class CenterAdminSubscriptionDetailView(generics.RetrieveAPIView):
+    """
+    Center Admin can view their own center's subscription details.
+    Read-only - they cannot change the subscription plan.
+    """
+    serializer_class = SubscriptionSerializer
+    permission_classes = [permissions.IsAuthenticated, IsCenterAdmin]
+    
+    def get_object(self):
+        set_public_schema()
+        user = self.request.user
+        
+        if not user.center_id:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("You are not associated with any center.")
+        
+        try:
+            return Subscription.objects.get(center_id=user.center_id)
+        except Subscription.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("No subscription found for your center.")
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Get subscription details for the center admin's center."""
+        return super().retrieve(request, *args, **kwargs)

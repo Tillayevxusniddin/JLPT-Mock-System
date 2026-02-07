@@ -3,9 +3,57 @@ from django.db.models.signals import post_save
 from django.db import transaction
 from django.dispatch import receiver
 from django.apps import apps
+from django.utils import timezone
+from datetime import timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+@receiver(post_save, sender="centers.Center")
+@transaction.atomic
+def create_free_subscription_for_new_center(sender, instance, created, **kwargs):
+    """
+    Automatically create a FREE subscription for 2 months when a center is created.
+    Uses atomic transaction to ensure Center is rolled back if Subscription creation fails.
+    """
+    if not created:
+        return
+    
+    from apps.centers.models import Subscription
+    
+    # Set trial period to 2 months
+    trial_start = timezone.now()
+    trial_end = trial_start + timedelta(days=60)  # 2 months = 60 days
+    
+    # Update center trial dates within same transaction
+    instance.trial_ends_at = trial_end
+    instance.status = instance.Status.TRIAL
+    instance.save(update_fields=['trial_ends_at', 'status', 'updated_at'])
+    
+    # Create FREE subscription - will rollback Center creation if this fails
+    subscription = Subscription.objects.create(
+        center=instance,
+        plan=Subscription.Plan.FREE,
+        price=0,
+        currency='USD',
+        billing_cycle='monthly',
+        starts_at=trial_start,
+        ends_at=trial_end,
+        is_active=True,
+        auto_renew=False  # FREE trial doesn't auto-renew
+    )
+    
+    logger.info(
+        f"✅ Created FREE subscription for center: {instance.name} "
+        f"(expires: {trial_end.strftime('%Y-%m-%d')})",
+        extra={
+            'center_id': instance.id,
+            'center_name': instance.name,
+            'subscription_id': subscription.id,
+            'trial_ends_at': trial_end
+        }
+    )
 
 
 @receiver(post_save, sender="centers.Center")

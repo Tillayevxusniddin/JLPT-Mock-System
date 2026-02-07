@@ -5,6 +5,9 @@ from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from apps.centers.models import Invitation, ContactRequest, Center, Subscription
@@ -24,14 +27,107 @@ from apps.core.utils import generate_code
 class SubscriptionSerializer(serializers.ModelSerializer):
     """Subscription details for the center."""
     plan_display = serializers.CharField(source='get_plan_display', read_only=True)
+    is_expired = serializers.BooleanField(read_only=True)
+    days_remaining = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Subscription
         fields = [
-            'plan', 'plan_display', 'price', 'currency', 
-            'billing_cycle', 'next_billing_date', 'is_active', 'auto_renew'
+            'id', 'plan', 'plan_display', 'price', 'currency', 
+            'billing_cycle', 'next_billing_date', 'starts_at', 'ends_at',
+            'is_active', 'auto_renew', 'is_expired', 'days_remaining',
+            'created_at', 'updated_at'
         ]
-        read_only_fields = fields  # Usually managed by payment gateways/webhooks, mostly read-only for frontend
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'plan_display', 
+            'is_expired', 'days_remaining'
+        ]
+
+
+class SubscriptionDetailSerializer(serializers.ModelSerializer):
+    """Detailed subscription view including center information."""
+    plan_display = serializers.CharField(source='get_plan_display', read_only=True)
+    is_expired = serializers.BooleanField(read_only=True)
+    days_remaining = serializers.IntegerField(read_only=True)
+    center_name = serializers.CharField(source='center.name', read_only=True)
+    center_id = serializers.IntegerField(source='center.id', read_only=True)
+    
+    class Meta:
+        model = Subscription
+        fields = [
+            'id', 'center_id', 'center_name', 'plan', 'plan_display', 
+            'price', 'currency', 'billing_cycle', 'next_billing_date',
+            'starts_at', 'ends_at', 'is_active', 'auto_renew',
+            'is_expired', 'days_remaining', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'center_id', 'center_name', 'created_at', 'updated_at',
+            'plan_display', 'is_expired', 'days_remaining'
+        ]
+
+
+class SubscriptionUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Owner to update subscription plans.
+    Only plan can be changed; dates and pricing are auto-calculated.
+    """
+    
+    class Meta:
+        model = Subscription
+        fields = ['plan']
+    
+    def validate_plan(self, value):
+        """Ensure plan is valid for upgrade."""
+        valid_plans = [Subscription.Plan.FREE, Subscription.Plan.BASIC, 
+                      Subscription.Plan.PRO, Subscription.Plan.ENTERPRISE]
+        if value not in valid_plans:
+            raise serializers.ValidationError("Invalid subscription plan.")
+        return value
+    
+    def update(self, instance, validated_data):
+        """
+        Update subscription plan and adjust dates/pricing accordingly.
+        """
+        new_plan = validated_data.get('plan')
+        old_plan = instance.plan
+        
+        if new_plan == old_plan:
+            return instance
+        
+        # Update plan
+        instance.plan = new_plan
+        
+        # Set pricing based on plan (placeholder values - adjust as needed)
+        plan_pricing = {
+            Subscription.Plan.FREE: {'price': 0, 'months': 2},
+            Subscription.Plan.BASIC: {'price': 29.99, 'months': 1},
+            Subscription.Plan.PRO: {'price': 79.99, 'months': 1},
+            Subscription.Plan.ENTERPRISE: {'price': 199.99, 'months': 1},
+        }
+        
+        pricing = plan_pricing.get(new_plan, {'price': 0, 'months': 1})
+        instance.price = pricing['price']
+        
+        # Update subscription dates
+        now = timezone.now()
+        instance.starts_at = now
+        instance.ends_at = now + timedelta(days=30 * pricing['months'])
+        
+        # Activate subscription and update center status
+        instance.is_active = True
+        instance.auto_renew = new_plan != Subscription.Plan.FREE
+        instance.save()
+        
+        # Update center status to ACTIVE (if not FREE)
+        if new_plan != Subscription.Plan.FREE:
+            instance.center.status = instance.center.Status.ACTIVE
+            instance.center.save(update_fields=['status', 'updated_at'])
+            logger.info(
+                f"✅ Upgraded center {instance.center.name} to {new_plan}",
+                extra={'center_id': instance.center.id, 'plan': new_plan}
+            )
+        
+        return instance
 
 # --- CENTER SERIALIZERS ---
 
