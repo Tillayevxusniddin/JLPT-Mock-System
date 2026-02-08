@@ -272,14 +272,14 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
 class InvitationDetailSerializer(serializers.ModelSerializer):
     """Serializer for invitation details."""
-    invited_by = serializers.StringRelatedField()
-    center = serializers.StringRelatedField()
+    invited_by_id = serializers.IntegerField(source='invited_by.id', read_only=True)
+    center_id = serializers.IntegerField(source='center.id', read_only=True)
     target_user = UserSerializer(read_only=True)
 
     class Meta:
         model = Invitation
-        fields = ["id", "code", "role", "status", "is_guest", "center",
-                  "invited_by", "target_user", "expires_at", "created_at"]
+        fields = ["id", "code", "role", "status", "is_guest", "center_id",
+                  "invited_by_id", "target_user", "expires_at", "created_at"]
 
 class InvitationApproveSerializer(serializers.Serializer):
     code = serializers.CharField()
@@ -391,7 +391,7 @@ class CenterAdminUpdateSerializer(serializers.ModelSerializer):
 class ContactRequestCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ContactRequest
-        fields = ["center_name", "full_name", "phone_number", "message"]
+        fields = ["id", "center_name", "full_name", "phone_number", "message"]
     
     def validate(self, attrs):
         center_name = attrs.get('center_name')

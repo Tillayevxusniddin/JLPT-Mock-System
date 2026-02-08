@@ -323,6 +323,10 @@ def check_and_suspend_expired_subscriptions(self):
     from django.utils import timezone
     from apps.centers.models import Center, Subscription
     from django.db import transaction
+    from apps.core.tenant_utils import set_public_schema
+    
+    # Ensure we're in the public schema
+    set_public_schema()
     
     logger.info("🔍 Checking for expired subscriptions...")
     

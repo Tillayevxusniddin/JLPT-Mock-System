@@ -34,7 +34,8 @@ class GroupMembership(TenantBaseModel):
     user_id = models.BigIntegerField(db_index=True)
     role_in_group = models.CharField(max_length=20, choices=ROLE_IN_GROUP_CHOICES)
 
-    class Meta: 
+    class Meta:
+        db_table = 'groupmembership'
         unique_together = ("user_id", "group", "role_in_group") 
         indexes = [ 
             models.Index(fields=['user_id', 'group', 'role_in_group']),
@@ -56,7 +57,7 @@ class GroupMembershipHistory(models.Model):
     group = models.ForeignKey("groups.Group", on_delete=models.CASCADE, related_name="membership_history")
     role_in_group = models.CharField(max_length=20, choices=GroupMembership.ROLE_IN_GROUP_CHOICES)
     joined_at = models.DateTimeField()
-    left_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField()
 
     left_reason = models.CharField(
         max_length=20,
@@ -67,6 +68,7 @@ class GroupMembershipHistory(models.Model):
         ],
     )
     class Meta:
+        db_table = 'groupmembershiphistory'
         indexes = [
             models.Index(fields=['user_id', 'left_at']),
             models.Index(fields=['group', 'left_at']),

@@ -13,12 +13,13 @@ from .models import Material
 from .serializers import MaterialSerializer
 from .permissions import IsAdminOrTeacher, IsMaterialOwnerOrCenterAdmin
 from .swagger import material_viewset_schema
+from apps.groups.models import GroupMembership
 
 
 @material_viewset_schema
 class MaterialViewSet(viewsets.ModelViewSet):
     serializer_class = MaterialSerializer
-    queryset = Material.objects.all().order_by("-created_at")
+    queryset = Material.objects.alive().order_by("-created_at")
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["file_type", "is_public"]
     search_fields = ["name"]
@@ -43,7 +44,8 @@ class MaterialViewSet(viewsets.ModelViewSet):
             return Material.objects.none()
 
         user = self.request.user
-        base_qs = Material.objects.all().order_by("-created_at")
+        # SECURITY FIX: Use .alive() to filter soft-deleted materials
+        base_qs = Material.objects.alive().order_by("-created_at")
 
         # CENTER_ADMIN, TEACHER: See all materials
         if user.role in ("CENTER_ADMIN", "TEACHER"):
@@ -53,7 +55,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         if user.role == "STUDENT":
             return base_qs.filter(
                 Q(is_public=True) | 
-                Q(groups__memberships__user_id=user.id, groups__memberships__role_in_group="STUDENT")
+                Q(groups__memberships__user_id=user.id, groups__memberships__role_in_group=GroupMembership.ROLE_STUDENT)
             ).distinct()
 
         # GUEST: See nothing

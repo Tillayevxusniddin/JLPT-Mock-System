@@ -33,6 +33,14 @@ class SoftDeleteManager(models.Manager):
             return base.filter(deleted_at__isnull=True)
         return base
 
+    def alive(self):
+        """Return queryset with only non-deleted objects."""
+        return self.get_queryset().alive()
+
+    def dead(self):
+        """Return queryset with only soft-deleted objects."""
+        return self.get_queryset().dead()
+
     def hard_delete(self):
         return self.get_queryset().hard_delete()
 

@@ -87,6 +87,13 @@ class InvitationCreateView(generics.CreateAPIView):
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+class CenterFilterSet(FilterSet):
+    """FilterSet for Center model with proper field handling"""
+    class Meta:
+        model = Center
+        fields = ['status']  # Only use status for now
+
+
 class InvitationFilter(FilterSet):
     is_used = filters_module.BooleanFilter(method='filter_is_used')
     
@@ -165,8 +172,7 @@ class CenterAdminCreateView(generics.GenericAPIView):
 class OwnerCenterViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    # Changed from is_active to status
-    filterset_fields = ['status', 'is_active']
+    filterset_class = CenterFilterSet
     search_fields = ['name', 'description', 'address', 'email']
     ordering_fields = ['created_at', 'name']
     ordering = ['-created_at']
@@ -181,24 +187,7 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
         if getattr(self, 'swagger_fake_view', False):
             return Center.objects.none()
         
-        if self.action == "list":
-            return (
-                Center.objects.all()
-                .annotate(
-                    teacher_count=Count("user", filter=Q(user__role=User.Role.TEACHER))
-                )
-                .prefetch_related(
-                    Prefetch(
-                        "user",
-                        User.objects.filter(role=User.Role.CENTERADMIN).only(
-                            "id", "email", "first_name", "last_name", "center_id"
-                        ),
-                        to_attr="center_admins",
-                    )
-                )
-                .order_by("-created_at")
-            )
-        return Center.objects.all().order_by("created_at")
+        return Center.objects.all().order_by("-created_at")
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
@@ -240,17 +229,17 @@ class OwnerCenterViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def suspend(self, request, pk=None):
         center = self.get_object()
-        center.status = Center.Status.SUSPENDED
-        center.is_active = False
-        center.save(update_fields=['status', 'is_active', 'updated_at'])
+        Center.objects.filter(pk=center.pk).update(
+            status=Center.Status.SUSPENDED
+        )
         return Response({"status": "center suspended"}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def activate(self, request, pk=None):
         center = self.get_object()
-        center.status = Center.Status.ACTIVE
-        center.is_active = True
-        center.save(update_fields=['status', 'is_active', 'updated_at'])
+        Center.objects.filter(pk=center.pk).update(
+            status=Center.Status.ACTIVE
+        )
         return Response({"status": "center activated"}, status=status.HTTP_200_OK)
 
 
@@ -339,7 +328,12 @@ class CenterAdminCenterViewSet(viewsets.ModelViewSet):
     
     def get_object(self):
         set_public_schema()
-        return Center.objects.get(id=self.request.user.center_id)
+        # Use get_queryset to ensure user can only access their own center
+        try:
+            return self.get_queryset().get(pk=self.kwargs.get('pk'))
+        except Center.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Not found.")
     
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
@@ -428,7 +422,7 @@ class OwnerContactRequestViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
-        return Response({"message": "Contact request deleted."}, status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_204_NO_CONTENT)
     
     def perform_destroy(self, instance):
         instance.soft_delete()
@@ -492,7 +486,7 @@ class OwnerSubscriptionViewSet(viewsets.ModelViewSet):
     search_fields = ['center__name']
     ordering_fields = ['created_at', 'ends_at']
     ordering = ['-created_at']
-    http_method_names = ['get', 'patch', 'head', 'options']
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
     
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
@@ -519,7 +513,12 @@ class OwnerSubscriptionViewSet(viewsets.ModelViewSet):
         Update subscription plan.
         Owner can upgrade/downgrade any center's subscription.
         """
-        return super().partial_update(request, *args, **kwargs)
+        response = super().partial_update(request, *args, **kwargs)
+        # Return detailed serializer with all fields
+        subscription = self.get_object()
+        output_serializer = SubscriptionDetailSerializer(subscription)
+        response.data = output_serializer.data
+        return response
     
     @action(detail=True, methods=['post'])
     def upgrade(self, request, pk=None):

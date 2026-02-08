@@ -1,10 +1,20 @@
 # apps/materials/serializers.py
 import os
 import mimetypes
+import logging
 from rest_framework import serializers
 from .models import Material
 from apps.core.serializers import UserSummarySerializer
 from apps.groups.models import Group
+
+logger = logging.getLogger(__name__)
+
+# Try to import python-magic for robust MIME detection from file content
+try:
+    import magic
+    HAS_MAGIC = True
+except ImportError:
+    HAS_MAGIC = False
 
 class GroupSummarySerializer(serializers.ModelSerializer):
     class Meta:
@@ -65,22 +75,22 @@ class MaterialSerializer(serializers.ModelSerializer):
                     "file": f"File extension '{ext or 'unknown'}' does not match file_type '{effective_type}'. Allowed: {', '.join(sorted(allowed))}."
                 })
 
-            if hasattr(effective_file, "content_type") and effective_file.content_type:
-                raw = effective_file.content_type
-                mime_type = raw.split(";")[0].strip().lower()
-            else:
-                mime_type, _ = mimetypes.guess_type(
-                    getattr(effective_file, "name", "") or ""
-                )
-                mime_type = (mime_type or "").strip().lower()
+            # SECURITY FIX: Detect MIME type from file content, NOT from Content-Type header
+            # This prevents MIME spoofing attacks (e.g., uploading .exe as PDF)
+            mime_type = self._detect_mime_type_from_content(effective_file)
 
             EXPECTED_MIME_TYPES = {
                 Material.FileType.PDF: {'application/pdf'},
-                Material.FileType.AUDIO: {'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/x-wav'},
+                Material.FileType.AUDIO: {
+                    'audio/mpeg', 'audio/mp3', 'audio/x-mpeg',  # MPEG variants
+                    'audio/wav', 'audio/wave', 'audio/x-wav',   # WAV variants
+                    'audio/ogg', 'audio/vorbis', 'audio/x-vorbis+ogg',  # OGG variants
+                },
                 Material.FileType.IMAGE: {'image/jpeg', 'image/jpg', 'image/png'},
                 Material.FileType.DOCX: {
                     'application/msword',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/vnd.ms-word.document.macroEnabled.12',  # Word macro-enabled
                 },
             }
 
@@ -98,6 +108,54 @@ class MaterialSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"group_ids": "One or more groups not found."})
 
         return attrs
+
+    def _detect_mime_type_from_content(self, file_obj):
+        """
+        Detect MIME type from actual file content (magic bytes), NOT from headers.
+        This prevents MIME spoofing attacks.
+        
+        Args:
+            file_obj: Uploaded file object (UploadedFile or similar)
+            
+        Returns:
+            str: MIME type detected from file content (lowercase), or empty string if detection fails
+        """
+        try:
+            # Read first few bytes for magic detection
+            if hasattr(file_obj, 'seek'):
+                file_obj.seek(0)
+            
+            file_data = file_obj.read(512)  # Read first 512 bytes for magic detection
+            
+            # Reset file pointer for later processing
+            if hasattr(file_obj, 'seek'):
+                file_obj.seek(0)
+            
+            # Primary: Use python-magic if available (most reliable)
+            if HAS_MAGIC and file_data:
+                try:
+                    mime_type = magic.from_buffer(file_data, mime=True)
+                    if mime_type:
+                        logger.info(f"MIME detected via magic: {mime_type}")
+                        return mime_type.lower()
+                except Exception as e:
+                    logger.warning(f"Magic library detection failed: {e}")
+            
+            # Fallback: mimetypes.guess_type() based on filename only (less secure)
+            filename = getattr(file_obj, 'name', '')
+            if filename:
+                guessed, _ = mimetypes.guess_type(filename)
+                if guessed:
+                    logger.info(f"MIME guessed via filename: {guessed}")
+                    return guessed.lower()
+            
+            # Last resort: Log warning and return empty (will fail validation)
+            logger.warning(f"Could not detect MIME type for file: {filename}")
+            return ""
+            
+        except Exception as e:
+            logger.error(f"Error detecting MIME type: {e}")
+            return ""
 
     def create(self, validated_data):
         group_ids = validated_data.pop('group_ids', [])

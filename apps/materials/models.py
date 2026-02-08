@@ -1,7 +1,10 @@
 #apps/materials/models.py
+import logging
 from django.db import models
 from apps.core.models import TenantBaseModel
 from apps.core.tenant_utils import get_current_schema
+
+logger = logging.getLogger(__name__)
 
 
 def tenant_material_upload_path(instance, filename):
@@ -9,6 +12,8 @@ def tenant_material_upload_path(instance, filename):
     Tenant-isolated upload path for S3/storage. Never relies on connection.tenant.
     Uses get_current_schema() and Center lookup in public schema; fallback to
     schema_name to prevent file collisions between centers.
+    
+    SECURITY NOTE: Logs all Center lookup failures for monitoring.
     """
     from apps.core.tenant_utils import with_public_schema
     from apps.centers.models import Center
@@ -24,8 +29,18 @@ def tenant_material_upload_path(instance, filename):
         )
         if center is not None:
             return f"tenants/{center.id}/materials/{filename}"
-    except Exception:
-        pass
+    except Exception as e:
+        # SECURITY FIX: Log the Center lookup failure for monitoring/debugging
+        logger.error(
+            f"Center lookup failed for schema_name={schema_name}. "
+            f"Falling back to schema-based path. Error: {e}",
+            exc_info=True
+        )
+    
+    logger.warning(
+        f"Using schema_name-based fallback path for material upload: "
+        f"schema={schema_name}, filename={filename}"
+    )
     return f"tenants/{schema_name}/materials/{filename}"
 
 

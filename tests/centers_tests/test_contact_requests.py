@@ -180,8 +180,7 @@ class TestOwnerContactRequestManagement:
     ):
         """Deleted contact requests are hidden from listing by default."""
         # Soft delete
-        contact_request_pending.is_deleted = True
-        contact_request_pending.save()
+        contact_request_pending.soft_delete()
         
         url = '/api/v1/owner-contact-requests/'
         response = api_client.get(url, **get_auth_header(owner_user))
@@ -199,7 +198,7 @@ class TestOwnerContactRequestManagement:
         response = api_client.get(url, **get_auth_header(owner_user))
         
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['id'] == contact_request_pending.id
+        assert str(response.data['id']) == str(contact_request_pending.id)
         assert response.data['center_name'] == contact_request_pending.center_name
 
 
@@ -390,9 +389,10 @@ class TestContactRequestEdgeCases:
         response = api_client.delete(url, **get_auth_header(owner_user))
         assert response.status_code == status.HTTP_204_NO_CONTENT
         
-        # Still exists in database
+        # Still exists in database (using _base_manager to get the queryset without soft delete filter)
         from apps.centers.models import ContactRequest
-        assert ContactRequest.objects.filter(id=contact_request_pending.id).exists()
+        base_queryset = ContactRequest._base_manager.all()
+        assert base_queryset.filter(id=contact_request_pending.id).exists()
         
         # But is marked deleted
         contact_request_pending.refresh_from_db()

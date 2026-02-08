@@ -304,9 +304,11 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
 
         with transaction.atomic():
             group = Group.objects.select_for_update().get(id=group_id)
-            existing_user_ids = set(
+            # Get existing memberships as (user_id, role_in_group) tuples
+            # A user can be STUDENT and TEACHER in same group, so check both
+            existing_memberships = set(
                 GroupMembership.objects.filter(group_id=group_id).values_list(
-                    "user_id", flat=True
+                    "user_id", "role_in_group"
                 )
             )
 
@@ -315,7 +317,7 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
             for m in unique_members:
                 uid = m["user_id"]
                 role = m["role_in_group"]
-                if uid in existing_user_ids:
+                if (uid, role) in existing_memberships:
                     continue
                 new_memberships.append(
                     GroupMembership(
@@ -324,7 +326,7 @@ class BulkGroupMembershipSerializer(serializers.Serializer):
                         role_in_group=role,
                     )
                 )
-                existing_user_ids.add(uid)
+                existing_memberships.add((uid, role))
                 if role == GroupMembership.ROLE_STUDENT:
                     new_student_count += 1
 

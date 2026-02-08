@@ -170,9 +170,9 @@ class Center(PublicBaseModel):
         return super().hard_delete(using=using, keep_parents=keep_parents)
 
     class Meta:
-        db_table = 'organizations'
-        verbose_name = _('organization')
-        verbose_name_plural = _('organizations')
+        db_table = 'centers'
+        verbose_name = _('center')
+        verbose_name_plural = _('centers')
         ordering = ['-created_at']
     
     def __str__(self):

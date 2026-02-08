@@ -292,9 +292,9 @@ class TestCenterAdminSubscriptionView:
 
 @pytest.mark.django_db
 class TestAutoSuspensionTask:
-    """Test automatic suspension of expired FREE trials."""
+    """Test automatically suspension of expired FREE trials."""
     
-    def test_expired_centers_are_suspended(self, center_expired, mock_celery_beat_task):
+    def test_expired_centers_are_suspended(self, center_expired):
         """Expired FREE trial centers are suspended by Celery task."""
         from apps.centers.tasks import check_and_suspend_expired_subscriptions
         

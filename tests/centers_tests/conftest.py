@@ -244,14 +244,15 @@ def center_basic(db):
     """
     from apps.centers.models import Center, Subscription
     from apps.core.tenant_utils import set_public_schema
-    
+
     set_public_schema()
-    
+
+    # Create center with TRIAL status first (will be set by signal)
     center = Center.objects.create(
         name="Basic Plan Center",
         slug="basic-center",
         schema_name="tenant_basic_center",
-        status=Center.Status.ACTIVE,
+        status=Center.Status.TRIAL,  # Signal will set this
         email="contact@basic.com",
         phone="+998902222222",
         is_ready=True,
@@ -267,6 +268,10 @@ def center_basic(db):
     subscription.auto_renew = True
     subscription.save()
     
+    # After subscription is updated to BASIC (paid), set center status to ACTIVE
+    center.status = Center.Status.ACTIVE
+    center.save(update_fields=['status', 'updated_at'])
+    
     return center
 
 
@@ -280,11 +285,12 @@ def center_pro(db):
     
     set_public_schema()
     
+    # Create center with TRIAL status first (will be set by signal)
     center = Center.objects.create(
         name="Pro Plan Center",
         slug="pro-center",
         schema_name="tenant_pro_center",
-        status=Center.Status.ACTIVE,
+        status=Center.Status.TRIAL,  # Signal will set this
         email="contact@pro.com",
         is_ready=True,
     )
@@ -299,6 +305,10 @@ def center_pro(db):
     subscription.auto_renew = True
     subscription.save()
     
+    # After subscription is updated to PRO (paid), set center status to ACTIVE
+    center.status = Center.Status.ACTIVE
+    center.save(update_fields=['status', 'updated_at'])
+    
     return center
 
 
@@ -312,11 +322,12 @@ def center_enterprise(db):
     
     set_public_schema()
     
+    # Create center with TRIAL status first (will be set by signal)
     center = Center.objects.create(
         name="Enterprise Plan Center",
         slug="enterprise-center",
         schema_name="tenant_enterprise_center",
-        status=Center.Status.ACTIVE,
+        status=Center.Status.TRIAL,  # Signal will set this
         email="contact@enterprise.com",
         is_ready=True,
     )
@@ -330,6 +341,10 @@ def center_enterprise(db):
     subscription.ends_at = timezone.now() + timedelta(days=365)
     subscription.auto_renew = True
     subscription.save()
+    
+    # After subscription is updated to ENTERPRISE (paid), set center status to ACTIVE
+    center.status = Center.Status.ACTIVE
+    center.save(update_fields=['status', 'updated_at'])
     
     return center
 
@@ -467,7 +482,7 @@ def invitation_pending(db, center_trial, admin_trial):
     set_public_schema()
     
     return Invitation.objects.create(
-        code="STUDENT-INV-001",
+        code="STUD-INV-001",  # Max 12 chars
         role="STUDENT",
         center=center_trial,
         invited_by=admin_trial,
@@ -486,7 +501,7 @@ def invitation_teacher_pending(db, center_trial, admin_trial):
     set_public_schema()
     
     return Invitation.objects.create(
-        code="TEACHER-INV-001",
+        code="TCH-INV-0001",  # Max 12 chars
         role="TEACHER",
         center=center_trial,
         invited_by=admin_trial,
@@ -505,7 +520,7 @@ def invitation_guest(db, center_trial, admin_trial):
     set_public_schema()
     
     return Invitation.objects.create(
-        code="GUEST-INV-001",
+        code="GUEST-INV-01",  # Max 12 chars
         role="STUDENT",
         center=center_trial,
         invited_by=admin_trial,
@@ -524,7 +539,7 @@ def invitation_expired(db, center_trial, admin_trial):
     set_public_schema()
     
     return Invitation.objects.create(
-        code="EXPIRED-INV-001",
+        code="EXP-INV-0001",  # Max 12 chars
         role="STUDENT",
         center=center_trial,
         invited_by=admin_trial,
@@ -543,7 +558,7 @@ def invitation_approved(db, center_trial, admin_trial, student_trial):
     set_public_schema()
     
     return Invitation.objects.create(
-        code="APPROVED-INV-001",
+        code="APP-INV-0001",  # Max 12 chars
         role="STUDENT",
         center=center_trial,
         invited_by=admin_trial,

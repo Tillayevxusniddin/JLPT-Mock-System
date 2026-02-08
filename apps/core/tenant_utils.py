@@ -69,6 +69,14 @@ def set_public_schema():
     try:
         with connection.cursor() as cursor:
             cursor.execute("SET search_path TO public")
+    except Exception as e:
+        # If the transaction is aborted or we can't execute SQL, just continue
+        # The next request will reset the schema anyway
+        from django.db.utils import InternalError
+        if isinstance(e, InternalError) and 'aborted' in str(e):
+            pass  # Transaction is aborted, that's ok
+        else:
+            raise
     finally:
         _current_schema.set("public")
 

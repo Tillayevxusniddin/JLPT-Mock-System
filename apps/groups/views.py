@@ -34,15 +34,13 @@ class IsCenterAdminOrGroupTeacher(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user.role == User.Role.CENTERADMIN:
             return True
-        if request.user.role == "TEACHER":
+        if request.user.role == User.Role.TEACHER:
             return GroupMembership.objects.filter(
                 group=obj, 
                 user_id=request.user.id, 
                 role_in_group=GM.ROLE_TEACHER
             ).exists()
         return False
-
-
 
 @group_viewset_schema
 class GroupViewSet(viewsets.ModelViewSet):
@@ -112,6 +110,37 @@ class GroupViewSet(viewsets.ModelViewSet):
                 return Group.objects.none()
         
         return Group.objects.none()
+
+    def retrieve(self, request, *args, **kwargs):
+        """Get single group with optimized teacher_map to prevent N+1 queries."""
+        instance = self.get_object()
+        
+        # Fetch teacher data in single batch (same optimization as list())
+        teacher_map = {}
+        teacher_ids = list(
+            GroupMembership.objects.filter(
+                group_id=instance.id,
+                role_in_group=GM.ROLE_TEACHER
+            ).values_list('user_id', flat=True)
+        )
+        
+        if teacher_ids:
+            from apps.core.tenant_utils import with_public_schema
+            from apps.authentication.serializers import SimpleUserSerializer
+            
+            def fetch_teachers():
+                users = User.objects.filter(id__in=teacher_ids)
+                return {user.id: SimpleUserSerializer(user).data for user in users}
+            
+            user_data_map = with_public_schema(fetch_teachers)
+            teacher_map[str(instance.id)] = [
+                user_data_map[uid] for uid in teacher_ids if uid in user_data_map
+            ]
+        
+        context = self.get_serializer_context()
+        context['teacher_map'] = teacher_map
+        serializer = self.get_serializer(instance, context=context)
+        return Response(serializer.data)
 
     def list(self, request, *args, **kwargs):
         # Teacher details are batch-fetched from public schema (teacher_map) and
