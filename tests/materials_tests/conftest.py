@@ -160,7 +160,6 @@ def test_group(db, test_center):
         description="Test group for materials",
         max_students=30,
         is_active=True,
-        center_id=test_center.id,
     )
     return group
 
@@ -173,7 +172,6 @@ def second_group(db, test_center):
         description="Second test group",
         max_students=20,
         is_active=True,
-        center_id=test_center.id,
     )
     return group
 

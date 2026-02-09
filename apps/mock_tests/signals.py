@@ -14,7 +14,10 @@ from django.db import transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
+from django.db.models.signals import post_save
+
 from .models import QuestionGroup, Question, QuizQuestion
+from .services import recalc_section_and_mock_scores
 
 
 @receiver(post_delete, sender=QuestionGroup)
@@ -51,6 +54,20 @@ def delete_question_media(sender, instance, **kwargs):
                 except Exception:
                     pass
         transaction.on_commit(delete_files)
+
+
+@receiver(post_save, sender=Question)
+def recalc_scores_on_question_save(sender, instance, **kwargs):
+    if instance.group_id:
+        section = instance.group.section
+        transaction.on_commit(lambda: recalc_section_and_mock_scores(section))
+
+
+@receiver(post_delete, sender=Question)
+def recalc_scores_on_question_delete(sender, instance, **kwargs):
+    if instance.group_id:
+        section = instance.group.section
+        transaction.on_commit(lambda: recalc_section_and_mock_scores(section))
 
 
 @receiver(post_delete, sender=QuizQuestion)

@@ -1,13 +1,15 @@
 # apps/attempts/services.py
 
 from typing import Dict, Any, Tuple, Optional
+import json
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.core.serializers.json import DjangoJSONEncoder
 from decimal import Decimal
 from .models import Submission
 from apps.assignments.models import ExamAssignment, HomeworkAssignment
-from apps.mock_tests.models import MockTest, TestSection, Question, Quiz, QuizQuestion
+from apps.mock_tests.models import MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
 
 
 class StartExamService:
@@ -21,7 +23,6 @@ class StartExamService:
     """
     
     @staticmethod
-    @transaction.atomic
     def start_exam(user, exam_assignment_id: str) -> Tuple[Submission, Dict[str, Any]]:
         """
         Start an exam for a user.
@@ -57,39 +58,29 @@ class StartExamService:
         if exam_assignment.mock_test.status != MockTest.Status.PUBLISHED:
             raise ValidationError("Mock test is not published.")
         
-        # Check if user already has a completed submission
-        existing_submission = Submission.objects.filter(
-            user_id=user.id,
-            exam_assignment=exam_assignment,
-            status__in=[Submission.Status.SUBMITTED, Submission.Status.GRADED]
-        ).first()
-        
-        if existing_submission:
-            raise ValidationError(
-                "You have already completed this exam. Each exam can only be attempted once."
-            )
-        
-        # Check if user has a STARTED submission (resume exam)
-        started_submission = Submission.objects.filter(
-            user_id=user.id,
-            exam_assignment=exam_assignment,
-            status=Submission.Status.STARTED
-        ).first()
-        
-        if started_submission:
-            # Resume existing submission
-            submission = started_submission
+        # Create submission with DB-level uniqueness to avoid race conditions
+        try:
+            with transaction.atomic():
+                submission = Submission.objects.create(
+                    user_id=user.id,
+                    exam_assignment=exam_assignment,
+                    status=Submission.Status.STARTED,
+                    started_at=timezone.now()
+                )
+        except IntegrityError:
+            submission = Submission.objects.filter(
+                user_id=user.id,
+                exam_assignment=exam_assignment,
+            ).first()
+            if not submission:
+                raise ValidationError("Unable to start exam at this time. Please retry.")
+            if submission.status in (Submission.Status.SUBMITTED, Submission.Status.GRADED):
+                raise ValidationError(
+                    "You have already completed this exam. Each exam can only be attempted once."
+                )
             if not submission.started_at:
                 submission.started_at = timezone.now()
                 submission.save(update_fields=['started_at'])
-        else:
-            # Create new submission
-            submission = Submission.objects.create(
-                user_id=user.id,
-                exam_assignment=exam_assignment,
-                status=Submission.Status.STARTED,
-                started_at=timezone.now()
-            )
         
         # Fetch exam paper data (MockTest with all nested structures)
         mock_test = exam_assignment.mock_test
@@ -293,7 +284,6 @@ class GradingService:
             raise ValidationError("Submission has no associated resource (MockTest or Quiz).")
     
     @staticmethod
-    @transaction.atomic
     def grade_submission(submission: Submission, student_answers: Dict[str, int]) -> Dict[str, Any]:
         """
         Grade a submission and SAVE in one atomic transaction.
@@ -310,33 +300,34 @@ class GradingService:
         Raises:
             ValidationError: If submission is not STARTED or missing resource
         """
-        if submission.status != Submission.Status.STARTED:
-            raise ValidationError(
-                f"Cannot grade submission with status: {submission.status}. Only STARTED submissions can be submitted."
-            )
         snapshot_data = GradingService.create_snapshot(submission)
-        if submission.mock_test:
-            results = GradingService._grade_mock_test(submission.mock_test, student_answers, save=True)
-        elif submission.quiz:
-            results = GradingService._grade_quiz(submission.quiz, student_answers, save=True)
-        elif submission.exam_assignment and submission.exam_assignment.mock_test:
-            results = GradingService._grade_mock_test(
-                submission.exam_assignment.mock_test,
-                student_answers,
-                save=True,
-            )
-        else:
-            raise ValidationError("Submission has no associated resource (MockTest or Quiz).")
-        submission.answers = student_answers
-        submission.completed_at = timezone.now()
-        submission.status = Submission.Status.GRADED
-        submission.score = Decimal(str(results["total_score"]))
-        submission.results = results
-        submission.snapshot = snapshot_data
-        submission.save(update_fields=[
-            "answers", "completed_at", "status", "score", "results", "snapshot",
-        ])
-        return results
+        with transaction.atomic():
+            if submission.status != Submission.Status.STARTED:
+                raise ValidationError(
+                    f"Cannot grade submission with status: {submission.status}. Only STARTED submissions can be submitted."
+                )
+            if submission.mock_test:
+                results = GradingService._grade_mock_test(submission.mock_test, student_answers, save=True)
+            elif submission.quiz:
+                results = GradingService._grade_quiz(submission.quiz, student_answers, save=True)
+            elif submission.exam_assignment and submission.exam_assignment.mock_test:
+                results = GradingService._grade_mock_test(
+                    submission.exam_assignment.mock_test,
+                    student_answers,
+                    save=True,
+                )
+            else:
+                raise ValidationError("Submission has no associated resource (MockTest or Quiz).")
+            submission.answers = student_answers
+            submission.completed_at = timezone.now()
+            submission.status = Submission.Status.GRADED
+            submission.score = Decimal(str(results["total_score"]))
+            submission.results = results
+            submission.snapshot = snapshot_data
+            submission.save(update_fields=[
+                "answers", "completed_at", "status", "score", "results", "snapshot",
+            ])
+            return results
     
     @staticmethod
     def _grade_mock_test(mock_test, student_answers, save=False):
@@ -405,7 +396,7 @@ class GradingService:
                 'selected_index': selected_index,
             }
         
-        total_score = sum(s["score"] for s in section_scores.values())
+        total_score = sum((s["score"] for s in section_scores.values()), Decimal("0.00"))
         results = {
             "total_score": float(total_score),
             "sections": {},
@@ -551,6 +542,7 @@ class GradingService:
         Optimized with prefetch_related to avoid N+1 queries.
         """
         from apps.attempts.serializers import QuizPaperSerializer
+        from django.db.models import Prefetch
         
         # Prefetch questions to avoid N+1
         quiz = Quiz.objects.prefetch_related(
@@ -590,19 +582,19 @@ class GradingService:
         if submission.mock_test:
             # MockTest snapshot
             serializer = FullMockTestSnapshotSerializer(submission.mock_test)
-            snapshot_data = serializer.data
+            snapshot_data = json.loads(json.dumps(serializer.data, cls=DjangoJSONEncoder))
             snapshot_data['resource_type'] = 'mock_test'
             snapshot_data['snapshot_created_at'] = timezone.now().isoformat()
         elif submission.quiz:
             # Quiz snapshot
             serializer = FullQuizSnapshotSerializer(submission.quiz)
-            snapshot_data = serializer.data
+            snapshot_data = json.loads(json.dumps(serializer.data, cls=DjangoJSONEncoder))
             snapshot_data['resource_type'] = 'quiz'
             snapshot_data['snapshot_created_at'] = timezone.now().isoformat()
         elif submission.exam_assignment and submission.exam_assignment.mock_test:
             # Legacy exam submission
             serializer = FullMockTestSnapshotSerializer(submission.exam_assignment.mock_test)
-            snapshot_data = serializer.data
+            snapshot_data = json.loads(json.dumps(serializer.data, cls=DjangoJSONEncoder))
             snapshot_data['resource_type'] = 'mock_test'
             snapshot_data['snapshot_created_at'] = timezone.now().isoformat()
         else:
@@ -621,7 +613,7 @@ class GradingService:
                Listening (60 pts, min 19).
         """
         if level not in GradingService.JLPT_PASS_REQUIREMENTS:
-            total_float = float(total_score) if isinstance(total_score, Decimal) else total_score
+            total_float = float(total_score) if isinstance(total_score, Decimal) else float(total_score)
             return {
                 "level": level,
                 "total_score": total_float,
@@ -633,6 +625,7 @@ class GradingService:
         requirements = GradingService.JLPT_PASS_REQUIREMENTS[level]
         total_pass_mark = requirements["total_pass"]
         total_score_d = total_score if isinstance(total_score, Decimal) else Decimal(str(total_score))
+        total_pass_mark_d = Decimal(str(total_pass_mark))
 
         section_results = {}
         all_sections_passed = True
@@ -689,7 +682,10 @@ class GradingService:
                     score = Decimal(str(score))
                 if section.section_type == TestSection.SectionType.LISTENING:
                     listening_score += score
-                else:
+                elif section.section_type in (
+                    TestSection.SectionType.VOCAB,
+                    TestSection.SectionType.GRAMMAR_READING,
+                ):
                     lang_reading_score += score
             lang_read_min = Decimal(str(requirements["sections"]["language_reading_combined"]))
             listening_min = Decimal(str(requirements["sections"]["listening"]))
@@ -707,7 +703,7 @@ class GradingService:
             }
             all_sections_passed = all(sr["passed"] for sr in section_results.values())
 
-        total_passed = total_score_d >= Decimal(str(total_pass_mark))
+        total_passed = total_score_d >= total_pass_mark_d
         passed = total_passed and all_sections_passed
         return {
             "level": level,

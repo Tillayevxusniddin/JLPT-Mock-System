@@ -3,6 +3,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
 from apps.core.models import TenantBaseModel
 
 class ExamAssignment(TenantBaseModel):
@@ -126,6 +127,7 @@ class HomeworkAssignment(TenantBaseModel):
         ordering = ['-deadline']
         indexes = [
             models.Index(fields=['deadline', 'created_at']),
+            GinIndex(fields=['assigned_user_ids']),
         ]
         db_table = 'homework_assignments'
 

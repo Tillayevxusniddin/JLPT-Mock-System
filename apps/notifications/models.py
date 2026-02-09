@@ -69,6 +69,8 @@ class Notification(TenantBaseModel):
         indexes = [
             # Index for unread notifications query
             models.Index(fields=['user_id', 'is_read', '-created_at']),
+            # Index for list view ordering
+            models.Index(fields=['user_id', '-created_at']),
             # Index for notification type filtering
             models.Index(fields=['user_id', 'notification_type', '-created_at']),
         ]

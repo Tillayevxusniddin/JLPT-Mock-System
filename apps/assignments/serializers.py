@@ -11,6 +11,7 @@ from .services import validate_assignment_payload, validate_user_ids_belong_to_t
 from apps.groups.models import Group
 from apps.mock_tests.models import MockTest
 from apps.core.serializers import UserSummarySerializer
+from apps.groups.models import GroupMembership
 
 
 class GroupSummarySerializer(serializers.ModelSerializer):
@@ -80,6 +81,21 @@ class ExamAssignmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "mock_test": "MockTest is required."
             })
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if user and user.role == "TEACHER" and group_ids:
+            teaching_group_ids = set(
+                GroupMembership.objects.filter(
+                    user_id=user.id,
+                    role_in_group="TEACHER",
+                ).values_list("group_id", flat=True)
+            )
+            requested_group_ids = set(group_ids)
+            if not requested_group_ids.issubset(teaching_group_ids):
+                raise serializers.ValidationError({
+                    "assigned_group_ids": "Teachers can only assign groups they teach."
+                })
         
         try:
             validated_data = validate_assignment_payload(
@@ -260,6 +276,21 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "detail": "At least one group or one user must be assigned."
             })
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if user and user.role == "TEACHER" and group_ids:
+            teaching_group_ids = set(
+                GroupMembership.objects.filter(
+                    user_id=user.id,
+                    role_in_group="TEACHER",
+                ).values_list("group_id", flat=True)
+            )
+            requested_group_ids = set(group_ids)
+            if not requested_group_ids.issubset(teaching_group_ids):
+                raise serializers.ValidationError({
+                    "assigned_group_ids": "Teachers can only assign groups they teach."
+                })
         
         # Validate users belong to current center (strict: with_public_schema in service)
         request = self.context.get("request")
@@ -368,15 +399,27 @@ class HomeworkDetailSerializer(serializers.ModelSerializer):
     mock_tests = serializers.SerializerMethodField()
     quizzes = serializers.SerializerMethodField()
     assigned_groups = GroupSummarySerializer(many=True, read_only=True)
+    created_by = serializers.SerializerMethodField()
 
     class Meta:
         model = HomeworkAssignment
         fields = [
             "id", "title", "description", "deadline",
             "mock_tests", "quizzes", "assigned_groups",
-            "show_results_immediately", "created_at", "updated_at",
+            "show_results_immediately", "created_by_id", "created_by",
+            "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_created_by(self, obj):
+        if not obj.created_by_id:
+            return None
+        user_map = self.context.get("user_map")
+        if user_map is not None:
+            user = user_map.get(obj.created_by_id)
+            if user:
+                return UserSummarySerializer.from_user(user)
+        return None
 
     def to_representation(self, instance):
         request = self.context.get("request")

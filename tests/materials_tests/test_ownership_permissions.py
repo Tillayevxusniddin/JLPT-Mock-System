@@ -54,7 +54,7 @@ def test_admin_can_delete_any_material(api_client_admin, public_material):
     assert response.status_code == status.HTTP_204_NO_CONTENT
     
     # Verify material is soft-deleted (not hard-deleted)
-    material = Material.objects.filter(id=material_id).first()
+    material = Material.all_objects.filter(id=material_id).first()
     assert material is not None
     assert material.deleted_at is not None
 
@@ -129,7 +129,7 @@ def test_teacher_can_delete_own_material(api_client_teacher, teacher_user, publi
     assert response.status_code == status.HTTP_204_NO_CONTENT
     
     # Verify material is soft-deleted
-    material = Material.objects.filter(id=material_id).first()
+    material = Material.all_objects.filter(id=material_id).first()
     assert material is not None
     assert material.deleted_at is not None
 

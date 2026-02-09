@@ -1,5 +1,8 @@
 # apps/mock_tests/services.py
 from typing import Optional, Union
+from django.db import transaction
+from django.db.models import Sum
+from django.utils import timezone
 from django.core.exceptions import ValidationError
 from .models import MockTest, TestSection, QuestionGroup, Question
 
@@ -68,3 +71,51 @@ def validate_child_object_editable(obj: Union[TestSection, QuestionGroup, Questi
     mock_test = get_parent_mock_test(obj)
     if mock_test:
         validate_mock_test_editable(mock_test)
+
+
+def recalc_section_and_mock_scores(section: Optional[TestSection]) -> None:
+    """
+    Recalculate TestSection.total_score and MockTest.total_score based on alive Questions.
+    Uses soft-delete aware managers (Question.objects).
+    """
+    if not section:
+        return
+
+    section_total = (
+        Question.objects
+        .filter(group__section=section)
+        .aggregate(total=Sum("score"))
+        .get("total")
+        or 0
+    )
+    if section.total_score != section_total:
+        section.total_score = section_total
+        section.save(update_fields=["total_score"])
+
+    mock_test = section.mock_test
+    mock_total = (
+        TestSection.objects
+        .filter(mock_test=mock_test)
+        .aggregate(total=Sum("total_score"))
+        .get("total")
+        or 0
+    )
+    if mock_test.total_score != mock_total:
+        mock_test.total_score = mock_total
+        mock_test.save(update_fields=["total_score"])
+
+
+def soft_delete_mock_test_tree(mock_test: MockTest) -> None:
+    """
+    Soft-delete MockTest and all its children (sections, groups, questions).
+    Uses all_objects to include already soft-deleted rows.
+    """
+    if not mock_test:
+        return
+
+    now = timezone.now()
+    with transaction.atomic():
+        Question.all_objects.filter(group__section__mock_test=mock_test).update(deleted_at=now)
+        QuestionGroup.all_objects.filter(section__mock_test=mock_test).update(deleted_at=now)
+        TestSection.all_objects.filter(mock_test=mock_test).update(deleted_at=now)
+        MockTest.all_objects.filter(id=mock_test.id).update(deleted_at=now)

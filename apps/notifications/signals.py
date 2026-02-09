@@ -17,7 +17,8 @@ from django.dispatch import receiver
 from django.db import transaction
 
 from apps.notifications.services import NotificationService
-from apps.notifications.tasks import dispatch_ws_notification
+from apps.notifications.models import Notification
+from apps.core.tenant_utils import with_public_schema
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,30 @@ def _get_notification_model():
     return apps.get_model("notifications", "Notification")
 
 
+def _filter_approved_user_ids(user_ids):
+    """Return only users who are approved and active (public schema)."""
+    if not user_ids:
+        return set()
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+
+    def fetch():
+        return set(
+            User.objects.filter(
+                id__in=user_ids,
+                is_approved=True,
+                is_active=True,
+            ).values_list("id", flat=True)
+        )
+
+    return with_public_schema(fetch)
+
+
 def _push_to_websocket(user_id, payload):
     """Send a notification payload to the user's WebSocket group (notify_{user_id})."""
     try:
+        from apps.notifications.tasks import dispatch_ws_notification
         dispatch_ws_notification.delay(user_id, payload)
     except Exception as e:
         logger.error("Failed to enqueue WS notification for %s: %s", user_id, e)
@@ -157,30 +179,27 @@ def exam_assignment_opened_handler(sender, instance, created, **kwargs):
             role_in_group="STUDENT",
         ).values_list("user_id", flat=True)
     )
+    student_user_ids = _filter_approved_user_ids(student_user_ids)
     if not student_user_ids:
         return
     exam_id = instance.id
     title = instance.title
     link = f"/exams/{instance.id}/"
-
-    def _notify():
-        already = set(
-            Notification.objects.filter(
-                user_id__in=student_user_ids,
-                notification_type=Notification.NotificationType.EXAM_OPENED,
-                related_task_id=exam_id,
-            ).values_list("user_id", flat=True)
+    already = set(
+        Notification.objects.filter(
+            user_id__in=student_user_ids,
+            notification_type=Notification.NotificationType.EXAM_OPENED,
+            related_task_id=exam_id,
+        ).values_list("user_id", flat=True)
+    )
+    for user_id in student_user_ids - already:
+        NotificationService.send_notification_on_commit(
+            user_id=user_id,
+            message=f"Exam '{title}' is now open.",
+            type=Notification.NotificationType.EXAM_OPENED,
+            link=link,
+            related_ids={"task_id": exam_id},
         )
-        for user_id in student_user_ids - already:
-            NotificationService.send_notification_on_commit(
-                user_id=user_id,
-                message=f"Exam '{title}' is now open.",
-                type=Notification.NotificationType.EXAM_OPENED,
-                link=link,
-                related_ids={"task_id": exam_id},
-            )
-
-    transaction.on_commit(_notify)
 
 
 @receiver(post_save, sender=apps.get_model("assignments", "ExamAssignment"))
@@ -210,18 +229,14 @@ def exam_assignment_updated_handler(sender, instance, created, **kwargs):
         return
     link = f"/exams/{instance.id}/"
     message = f"Exam '{instance.title}' has been updated."
-
-    def _notify():
-        for user_id in student_user_ids:
-            NotificationService.send_notification_on_commit(
-                user_id=user_id,
-                message=message,
-                type=Notification.NotificationType.EXAM_UPDATED,
-                link=link,
-                related_ids={"task_id": instance.id},
-            )
-
-    transaction.on_commit(_notify)
+    for user_id in student_user_ids:
+        NotificationService.send_notification_on_commit(
+            user_id=user_id,
+            message=message,
+            type=Notification.NotificationType.EXAM_UPDATED,
+            link=link,
+            related_ids={"task_id": instance.id},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -258,30 +273,27 @@ def homework_assigned_handler(sender, instance, created, **kwargs):
     ).values_list("user_id", flat=True)
     explicit_user_ids = instance.assigned_user_ids or []
     target_user_ids = set(group_student_ids) | set(explicit_user_ids)
+    target_user_ids = _filter_approved_user_ids(target_user_ids)
     if not target_user_ids:
         return
     hw_id = instance.id
     title = instance.title
     link = f"/homeworks/{instance.id}/"
-
-    def _notify():
-        already = set(
-            Notification.objects.filter(
-                user_id__in=target_user_ids,
-                notification_type=Notification.NotificationType.TASK_ASSIGNED,
-                related_task_id=hw_id,
-            ).values_list("user_id", flat=True)
+    already = set(
+        Notification.objects.filter(
+            user_id__in=target_user_ids,
+            notification_type=Notification.NotificationType.TASK_ASSIGNED,
+            related_task_id=hw_id,
+        ).values_list("user_id", flat=True)
+    )
+    for user_id in target_user_ids - already:
+        NotificationService.send_notification_on_commit(
+            user_id=user_id,
+            message=f"New homework '{title}' has been assigned to you.",
+            type=Notification.NotificationType.TASK_ASSIGNED,
+            link=link,
+            related_ids={"task_id": hw_id},
         )
-        for user_id in target_user_ids - already:
-            NotificationService.send_notification_on_commit(
-                user_id=user_id,
-                message=f"New homework '{title}' has been assigned to you.",
-                type=Notification.NotificationType.TASK_ASSIGNED,
-                link=link,
-                related_ids={"task_id": hw_id},
-            )
-
-    transaction.on_commit(_notify)
 
 
 @receiver(post_save, sender=apps.get_model("assignments", "HomeworkAssignment"))
@@ -319,17 +331,14 @@ def homework_updated_handler(sender, instance, created, **kwargs):
         else f"Homework '{instance.title}' has been updated."
     )
 
-    def _notify():
-        for user_id in target_user_ids:
-            NotificationService.send_notification_on_commit(
-                user_id=user_id,
-                message=message,
-                type=notif_type,
-                link=link,
-                related_ids={"task_id": instance.id},
-            )
-
-    transaction.on_commit(_notify)
+    for user_id in target_user_ids:
+        NotificationService.send_notification_on_commit(
+            user_id=user_id,
+            message=message,
+            type=notif_type,
+            link=link,
+            related_ids={"task_id": instance.id},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -346,33 +355,30 @@ def submission_graded_handler(sender, instance, created, update_fields=None, **k
     user_id = instance.user_id
     submission_id = instance.id
 
-    def _notify():
-        if Notification.objects.filter(
-            user_id=user_id,
-            notification_type=Notification.NotificationType.SUBMISSION_GRADED,
-            related_submission_id=submission_id,
-        ).exists():
-            return
-        if instance.homework_assignment:
-            title = instance.homework_assignment.title
-            message = f"Your homework submission for '{title}' has been graded."
-            link = f"/homeworks/{instance.homework_assignment.id}/results/"
-        elif instance.exam_assignment:
-            title = instance.exam_assignment.title
-            message = f"Your exam submission for '{title}' has been graded."
-            link = f"/exams/{instance.exam_assignment.id}/results/"
-        else:
-            message = "Your submission has been graded."
-            link = None
-        NotificationService.send_notification_on_commit(
-            user_id=user_id,
-            message=message,
-            type=Notification.NotificationType.SUBMISSION_GRADED,
-            link=link,
-            related_ids={"submission_id": submission_id},
-        )
-
-    transaction.on_commit(_notify)
+    if Notification.objects.filter(
+        user_id=user_id,
+        notification_type=Notification.NotificationType.SUBMISSION_GRADED,
+        related_submission_id=submission_id,
+    ).exists():
+        return
+    if instance.homework_assignment:
+        title = instance.homework_assignment.title
+        message = f"Your homework submission for '{title}' has been graded."
+        link = f"/homeworks/{instance.homework_assignment.id}/results/"
+    elif instance.exam_assignment:
+        title = instance.exam_assignment.title
+        message = f"Your exam submission for '{title}' has been graded."
+        link = f"/exams/{instance.exam_assignment.id}/results/"
+    else:
+        message = "Your submission has been graded."
+        link = None
+    NotificationService.send_notification_on_commit(
+        user_id=user_id,
+        message=message,
+        type=Notification.NotificationType.SUBMISSION_GRADED,
+        link=link,
+        related_ids={"submission_id": submission_id},
+    )
 
 
 @receiver(post_save, sender=apps.get_model("attempts", "Submission"))
@@ -401,24 +407,21 @@ def submission_submitted_handler(sender, instance, created, update_fields=None, 
     if not teacher_ids:
         return
 
-    def _notify():
-        already = set(
-            Notification.objects.filter(
-                user_id__in=teacher_ids,
-                notification_type=Notification.NotificationType.NEW_SUBMISSION,
-                related_submission_id=submission_id,
-            ).values_list("user_id", flat=True)
+    already = set(
+        Notification.objects.filter(
+            user_id__in=teacher_ids,
+            notification_type=Notification.NotificationType.NEW_SUBMISSION,
+            related_submission_id=submission_id,
+        ).values_list("user_id", flat=True)
+    )
+    for uid in teacher_ids - already:
+        NotificationService.send_notification_on_commit(
+            user_id=uid,
+            message="A student has submitted an assignment for review.",
+            type=Notification.NotificationType.NEW_SUBMISSION,
+            link=None,
+            related_ids={"submission_id": submission_id},
         )
-        for uid in teacher_ids - already:
-            NotificationService.send_notification_on_commit(
-                user_id=uid,
-                message="A student has submitted an assignment for review.",
-                type=Notification.NotificationType.NEW_SUBMISSION,
-                link=None,
-                related_ids={"submission_id": submission_id},
-            )
-
-    transaction.on_commit(_notify)
 
 
 # ---------------------------------------------------------------------------
@@ -437,48 +440,48 @@ def group_membership_created_handler(sender, instance, created, **kwargs):
     role = instance.role_in_group.capitalize()
     link = f"/groups/{group_id}/"
     message = f"You have been added to group '{group_name}' as {role}."
+    approved_user_ids = _filter_approved_user_ids({user_id})
+    if not approved_user_ids:
+        return
+    if Notification.objects.filter(
+        user_id=user_id,
+        notification_type=Notification.NotificationType.GROUP_ADDED,
+        related_group_id=group_id,
+    ).exists():
+        return
+    NotificationService.send_notification_on_commit(
+        user_id=user_id,
+        message=message,
+        type=Notification.NotificationType.GROUP_ADDED,
+        link=link,
+        related_ids={"group_id": group_id},
+    )
 
-    def _notify():
-        if Notification.objects.filter(
-            user_id=user_id,
-            notification_type=Notification.NotificationType.GROUP_ADDED,
-            related_group_id=group_id,
-        ).exists():
-            return
-        NotificationService.send_notification_on_commit(
-            user_id=user_id,
-            message=message,
-            type=Notification.NotificationType.GROUP_ADDED,
-            link=link,
-            related_ids={"group_id": group_id},
+    # Notify teachers if a new student joins their group
+    if instance.role_in_group == "STUDENT":
+        GroupMembership = apps.get_model("groups", "GroupMembership")
+        teacher_ids = set(
+            GroupMembership.objects.filter(
+                group_id=group_id,
+                role_in_group="TEACHER",
+            ).values_list("user_id", flat=True)
         )
-
-        # Notify teachers if a new student joins their group
-        if instance.role_in_group == "STUDENT":
-            GroupMembership = apps.get_model("groups", "GroupMembership")
-            teacher_ids = set(
-                GroupMembership.objects.filter(
-                    group_id=group_id,
-                    role_in_group="TEACHER",
-                ).values_list("user_id", flat=True)
+        teacher_ids = _filter_approved_user_ids(teacher_ids)
+        already_teachers = set(
+            Notification.objects.filter(
+                user_id__in=teacher_ids,
+                notification_type=Notification.NotificationType.STUDENT_JOINED_GROUP,
+                related_group_id=group_id,
+            ).values_list("user_id", flat=True)
+        )
+        for tid in teacher_ids - already_teachers:
+            NotificationService.send_notification_on_commit(
+                user_id=tid,
+                message=f"A new student has joined your group '{group_name}'.",
+                type=Notification.NotificationType.STUDENT_JOINED_GROUP,
+                link=link,
+                related_ids={"group_id": group_id},
             )
-            already_teachers = set(
-                Notification.objects.filter(
-                    user_id__in=teacher_ids,
-                    notification_type=Notification.NotificationType.STUDENT_JOINED_GROUP,
-                    related_group_id=group_id,
-                ).values_list("user_id", flat=True)
-            )
-            for tid in teacher_ids - already_teachers:
-                NotificationService.send_notification_on_commit(
-                    user_id=tid,
-                    message=f"A new student has joined your group '{group_name}'.",
-                    type=Notification.NotificationType.STUDENT_JOINED_GROUP,
-                    link=link,
-                    related_ids={"group_id": group_id},
-                )
-
-    transaction.on_commit(_notify)
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +521,7 @@ def mock_test_published_handler(sender, instance, created, **kwargs):
             return None, []
         admins = User.objects.filter(
             center_id=center.id,
-            role=User.Role.CENTER_ADMIN,
+            role=User.Role.CENTERADMIN,
         ).values_list("id", flat=True)
         return center, list(admins)
 
@@ -529,24 +532,21 @@ def mock_test_published_handler(sender, instance, created, **kwargs):
     Notification = _get_notification_model()
     link = f"/mock-tests/{instance.id}/"
 
-    def _notify():
-        already = set(
-            Notification.objects.filter(
-                user_id__in=admin_ids,
-                notification_type=Notification.NotificationType.MOCK_TEST_PUBLISHED,
-                related_task_id=instance.id,
-            ).values_list("user_id", flat=True)
+    already = set(
+        Notification.objects.filter(
+            user_id__in=admin_ids,
+            notification_type=Notification.NotificationType.MOCK_TEST_PUBLISHED,
+            related_task_id=instance.id,
+        ).values_list("user_id", flat=True)
+    )
+    for uid in set(admin_ids) - already:
+        NotificationService.send_notification_on_commit(
+            user_id=uid,
+            message=f"A teacher published mock test '{instance.title}'.",
+            type=Notification.NotificationType.MOCK_TEST_PUBLISHED,
+            link=link,
+            related_ids={"task_id": instance.id},
         )
-        for uid in set(admin_ids) - already:
-            NotificationService.send_notification_on_commit(
-                user_id=uid,
-                message=f"A teacher published mock test '{instance.title}'.",
-                type=Notification.NotificationType.MOCK_TEST_PUBLISHED,
-                link=link,
-                related_ids={"task_id": instance.id},
-            )
-
-    transaction.on_commit(_notify)
 
 
 # ---------------------------------------------------------------------------
@@ -574,23 +574,23 @@ def contact_request_priority_handler(sender, instance, created, **kwargs):
             return None, []
         admins = User.objects.filter(
             center_id=center.id,
-            role=User.Role.CENTER_ADMIN,
+            role=User.Role.CENTERADMIN,
         ).values_list("id", flat=True)
         return center, list(admins)
 
     center, admin_ids = with_public_schema(get_center_and_admins)
 
-    def _notify():
-        for uid in owner_ids:
-            NotificationService.send_notification_on_commit(
-                user_id=uid,
-                message=f"High priority contact request from {instance.full_name}.",
-                type=Notification.NotificationType.CONTACT_REQUEST_HIGH_PRIORITY,
-                link=None,
-                related_ids={"contact_request_id": instance.id},
-            )
+    for uid in owner_ids:
+        NotificationService.send_notification_on_commit(
+            user_id=uid,
+            message=f"High priority contact request from {instance.full_name}.",
+            type=Notification.NotificationType.CONTACT_REQUEST_HIGH_PRIORITY,
+            link=None,
+            related_ids={"contact_request_id": instance.id},
+        )
 
-        if center and admin_ids:
+    if center and admin_ids:
+        def _notify_admins():
             for uid in admin_ids:
                 _create_notification(
                     center=center,
@@ -600,4 +600,4 @@ def contact_request_priority_handler(sender, instance, created, **kwargs):
                     related_contact_request_id=instance.id,
                 )
 
-    transaction.on_commit(_notify)
+        transaction.on_commit(_notify_admins)

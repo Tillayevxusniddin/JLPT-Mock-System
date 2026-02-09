@@ -21,6 +21,9 @@ from the public schema via `user_map` (Zero N+1 schema switching).
 
 **Media isolation:** `audio_file` and `image` fields use tenant-isolated upload paths
 (same pattern as the materials app) to prevent cross-center media leaks.
+
+**Answer protection:** For STUDENT & GUEST, responses **exclude** `correct_option_index`
+and remove `is_correct` from options. Teachers/Admins receive full answer data.
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -111,6 +114,10 @@ QuestionGroups and Questions are **removed from S3/storage** via post_delete sig
 """
 MOCK_TEST_PUBLISH_DESC = """
 Toggle MockTest status between DRAFT and PUBLISHED. **CENTER_ADMIN** can publish/unpublish any test; **TEACHER** only tests they created (`created_by_id` = user id). Students and guests receive **403**.
+"""
+MOCK_TEST_CLONE_DESC = """
+Clone a mock test (deep copy). Creates a full copy of sections, question groups, and questions.
+**Status is reset to DRAFT** and ownership is set to the requesting user.
 """
 
 mock_test_viewset_schema = extend_schema_view(
@@ -233,6 +240,17 @@ mock_test_viewset_schema = extend_schema_view(
                     ),
                 ],
             ),
+            404: RESP_404,
+        },
+    ),
+    clone=extend_schema(
+        tags=["Mock Tests"],
+        summary="Clone mock test",
+        description=MOCK_TEST_CLONE_DESC,
+        responses={
+            201: MockTestSerializer,
+            401: RESP_401,
+            403: RESP_403,
             404: RESP_404,
         },
     ),

@@ -4,6 +4,7 @@ Mock tests serializers. Published-protection logic (validate_mock_test_editable,
 validate_child_object_editable) is applied in validate() and documented in
 apps.mock_tests.swagger. correct_option_index is auto-calculated from options.
 """
+from django.db import transaction
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -72,19 +73,39 @@ class QuestionSerializer(serializers.ModelSerializer):
         
         return attrs
 
-    def save(self, **kwargs):
-        """Override save to automatically set correct_option_index."""
-        instance = super().save(**kwargs)
-        
-        # Set correct_option_index if options exist
-        if instance.options:
-            for idx, opt in enumerate(instance.options):
+    def _set_correct_option_index(self, validated_data):
+        options = validated_data.get("options")
+        if options:
+            for idx, opt in enumerate(options):
                 if opt.get("is_correct", False):
-                    instance.correct_option_index = idx
-                    instance.save(update_fields=["correct_option_index"])
+                    validated_data["correct_option_index"] = idx
                     break
-        
-        return instance
+        return validated_data
+
+    def create(self, validated_data):
+        validated_data = self._set_correct_option_index(validated_data)
+        with transaction.atomic():
+            return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data = self._set_correct_option_index(validated_data)
+        with transaction.atomic():
+            return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and user.role in ("STUDENT", "GUEST"):
+            data.pop("correct_option_index", None)
+            options = data.get("options")
+            if isinstance(options, list):
+                data["options"] = [
+                    {k: v for k, v in opt.items() if k != "is_correct"}
+                    if isinstance(opt, dict) else opt
+                    for opt in options
+                ]
+        return data
 
 
 class QuestionGroupSerializer(serializers.ModelSerializer):
@@ -241,19 +262,39 @@ class QuizQuestionSerializer(serializers.ModelSerializer):
         
         return value
 
-    def save(self, **kwargs):
-        """Override save to automatically set correct_option_index."""
-        instance = super().save(**kwargs)
-        
-        # Set correct_option_index if options exist
-        if instance.options:
-            for idx, opt in enumerate(instance.options):
+    def _set_correct_option_index(self, validated_data):
+        options = validated_data.get("options")
+        if options:
+            for idx, opt in enumerate(options):
                 if opt.get("is_correct", False):
-                    instance.correct_option_index = idx
-                    instance.save(update_fields=["correct_option_index"])
+                    validated_data["correct_option_index"] = idx
                     break
-        
-        return instance
+        return validated_data
+
+    def create(self, validated_data):
+        validated_data = self._set_correct_option_index(validated_data)
+        with transaction.atomic():
+            return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data = self._set_correct_option_index(validated_data)
+        with transaction.atomic():
+            return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and user.role in ("STUDENT", "GUEST"):
+            data.pop("correct_option_index", None)
+            options = data.get("options")
+            if isinstance(options, list):
+                data["options"] = [
+                    {k: v for k, v in opt.items() if k != "is_correct"}
+                    if isinstance(opt, dict) else opt
+                    for opt in options
+                ]
+        return data
 
 
 class QuizSerializer(serializers.ModelSerializer):

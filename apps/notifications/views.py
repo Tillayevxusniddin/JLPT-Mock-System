@@ -29,7 +29,14 @@ class NotificationViewSet(
         user = self.request.user
         if not user or not user.is_authenticated:
             return Notification.objects.none()
-        return Notification.objects.filter(user_id=user.id).order_by("-created_at")
+        queryset = Notification.objects.filter(user_id=user.id)
+        is_read = self.request.query_params.get("is_read")
+        if is_read is not None:
+            if str(is_read).lower() in ("true", "1", "yes"):
+                queryset = queryset.filter(is_read=True)
+            elif str(is_read).lower() in ("false", "0", "no"):
+                queryset = queryset.filter(is_read=False)
+        return queryset.order_by("-created_at")
 
     def update(self, request, *args, **kwargs):
         return self.partial_update(request, *args, **kwargs)

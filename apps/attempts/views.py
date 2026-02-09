@@ -22,6 +22,7 @@ from .permissions import IsSubmissionOwnerOrTeacher, CanStartExam
 from .services import StartExamService, StartHomeworkService, GradingService
 from .swagger import submission_viewset_schema
 from apps.assignments.models import ExamAssignment, HomeworkAssignment
+from apps.core.tenant_utils import get_current_schema
 
 
 @submission_viewset_schema
@@ -129,6 +130,10 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             ).get(id=submission_id, user_id=user.id)
         except Submission.DoesNotExist:
             raise DRFValidationError({"submission_id": "Submission not found."})
+        current_schema = get_current_schema()
+        user_center_schema = getattr(getattr(user, "center", None), "schema_name", None)
+        if user_center_schema and current_schema != user_center_schema:
+            raise PermissionDenied("Cross-center submission is not allowed.")
         if submission.user_id != user.id:
             raise PermissionDenied("You can only submit your own submissions.")
         if submission.status != Submission.Status.STARTED:
@@ -324,6 +329,10 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             ).get(id=submission_id, user_id=user.id)
         except Submission.DoesNotExist:
             raise DRFValidationError({"submission_id": "Submission not found."})
+        current_schema = get_current_schema()
+        user_center_schema = getattr(getattr(user, "center", None), "schema_name", None)
+        if user_center_schema and current_schema != user_center_schema:
+            raise PermissionDenied("Cross-center submission is not allowed.")
         if not submission.homework_assignment:
             raise DRFValidationError({"detail": "This endpoint is only for homework submissions."})
         if submission.status != Submission.Status.STARTED:

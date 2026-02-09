@@ -27,8 +27,11 @@ class SoftDeleteQuerySet(models.QuerySet):
 
 
 class SoftDeleteManager(models.Manager):
+    def _base_queryset(self):
+        return SoftDeleteQuerySet(self.model, using=self._db)
+
     def get_queryset(self):
-        base = SoftDeleteQuerySet(self.model, using=self._db)
+        base = self._base_queryset()
         if hasattr(self.model, "deleted_at"):
             return base.filter(deleted_at__isnull=True)
         return base
@@ -39,8 +42,11 @@ class SoftDeleteManager(models.Manager):
 
     def dead(self):
         """Return queryset with only soft-deleted objects."""
-        return self.get_queryset().dead()
+        base = self._base_queryset()
+        if hasattr(self.model, "deleted_at"):
+            return base.filter(deleted_at__isnull=False)
+        return base.none()
 
     def hard_delete(self):
-        return self.get_queryset().hard_delete()
+        return self._base_queryset().hard_delete()
 

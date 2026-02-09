@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
 from .models import ExamAssignment, HomeworkAssignment
+from apps.mock_tests.models import MockTest
 from .serializers import (
     ExamAssignmentSerializer,
     HomeworkAssignmentSerializer,
@@ -46,7 +47,11 @@ class ExamAssignmentViewSet(viewsets.ModelViewSet):
                 user_id=user.id, role_in_group="STUDENT"
             ).values_list("group_id", flat=True)
             if student_group_ids:
-                return queryset.filter(assigned_groups__id__in=student_group_ids).distinct()
+                return queryset.filter(
+                    assigned_groups__id__in=student_group_ids,
+                    mock_test__status=MockTest.Status.PUBLISHED,
+                    mock_test__deleted_at__isnull=True,
+                ).distinct()
             return ExamAssignment.objects.none()
         return ExamAssignment.objects.none()
 
@@ -65,6 +70,20 @@ class ExamAssignmentViewSet(viewsets.ModelViewSet):
         )
         if page is not None:
             return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user_map = {}
+        if instance.created_by_id:
+            from apps.core.tenant_utils import with_public_schema
+            from apps.authentication.models import User
+            user_map = with_public_schema(
+                lambda: {u.id: u for u in User.objects.filter(id__in=[instance.created_by_id])}
+            )
+        serializer = self.get_serializer(
+            instance, context={"request": request, "user_map": user_map}
+        )
         return Response(serializer.data)
 
     def perform_create(self, serializer):
@@ -104,9 +123,19 @@ class HomeworkAssignmentViewSet(viewsets.ModelViewSet):
             query = Q(assigned_user_ids__contains=[user.id])
             if student_group_ids:
                 query |= Q(assigned_groups__id__in=student_group_ids)
-            return queryset.filter(query).distinct()
+            return queryset.filter(
+                query,
+            ).filter(
+                Q(mock_tests__isnull=True)
+                | Q(mock_tests__status=MockTest.Status.PUBLISHED, mock_tests__deleted_at__isnull=True)
+            ).distinct()
         if user.role == "GUEST":
-            return queryset.filter(assigned_user_ids__contains=[user.id])
+            return queryset.filter(
+                assigned_user_ids__contains=[user.id]
+            ).filter(
+                Q(mock_tests__isnull=True)
+                | Q(mock_tests__status=MockTest.Status.PUBLISHED, mock_tests__deleted_at__isnull=True)
+            ).distinct()
         return HomeworkAssignment.objects.none()
 
     def list(self, request, *args, **kwargs):
@@ -124,6 +153,20 @@ class HomeworkAssignmentViewSet(viewsets.ModelViewSet):
         )
         if page is not None:
             return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user_map = {}
+        if instance.created_by_id:
+            from apps.core.tenant_utils import with_public_schema
+            from apps.authentication.models import User
+            user_map = with_public_schema(
+                lambda: {u.id: u for u in User.objects.filter(id__in=[instance.created_by_id])}
+            )
+        serializer = self.get_serializer(
+            instance, context={"request": request, "user_map": user_map}
+        )
         return Response(serializer.data)
 
     def perform_create(self, serializer):

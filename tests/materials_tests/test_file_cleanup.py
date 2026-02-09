@@ -31,19 +31,15 @@ def test_soft_delete_does_not_trigger_post_delete_signal(public_material, mock_s
     material_id = public_material.id
     file_name = public_material.file.name
     
-    # Verify file exists in storage
-    assert mock_storage.exists(file_name)
-    
-    # Soft delete via delete() method
-    public_material.delete()
+    # Soft delete via delete() method (should not trigger post_delete)
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit:
+        public_material.delete()
+        on_commit.assert_not_called()
     
     # Verify material is soft-deleted (deleted_at set)
-    material = Material.objects.filter(id=material_id).first()
+    material = Material.all_objects.filter(id=material_id).first()
     assert material is not None
     assert material.deleted_at is not None
-    
-    # Verify file still exists (signal not triggered)
-    assert mock_storage.exists(file_name)
 
 
 @pytest.mark.django_db
@@ -73,17 +69,19 @@ def test_hard_delete_triggers_post_delete_signal(public_material, mock_storage):
     material_id = public_material.id
     file_name = public_material.file.name
     
-    # Verify file exists
-    assert mock_storage.exists(file_name)
-    
-    # Hard delete
-    public_material.hard_delete()
-    
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(public_material.file, "delete") as delete_mock:
+        on_commit.side_effect = lambda callback: callback()
+
+        # Hard delete
+        public_material.hard_delete()
+
+        on_commit.assert_called_once()
+        delete_mock.assert_called_once_with(save=False)
+
     # Verify material is deleted from DB
     assert not Material.objects.filter(id=material_id).exists()
-    
-    # Verify file is deleted from storage
-    assert not mock_storage.exists(file_name)
+    assert not Material.all_objects.filter(id=material_id).exists()
 
 
 @pytest.mark.django_db
@@ -98,16 +96,17 @@ def test_hard_delete_via_api_endpoint(api_client_admin, public_material, mock_st
     material_id = public_material.id
     file_name = public_material.file.name
     
-    response = api_client_admin.delete(f'/api/v1/materials/{material_id}/')
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(public_material.file, "delete") as delete_mock:
+        response = api_client_admin.delete(f'/api/v1/materials/{material_id}/')
+        on_commit.assert_not_called()
+        delete_mock.assert_not_called()
     assert response.status_code == status.HTTP_204_NO_CONTENT
     
     # Verify soft-delete occurred (not hard-delete)
-    material = Material.objects.filter(id=material_id).first()
+    material = Material.all_objects.filter(id=material_id).first()
     assert material is not None
     assert material.deleted_at is not None
-    
-    # File should still exist (soft-delete, no signal)
-    assert mock_storage.exists(file_name)
 
 
 # ============================================================================
@@ -123,15 +122,23 @@ def test_file_deletion_deferred_until_commit(public_material, mock_storage):
     """
     file_name = public_material.file.name
     
-    # Verify file exists
-    assert mock_storage.exists(file_name)
-    
-    # Hard delete (in transaction)
-    public_material.hard_delete()
-    
-    # After transaction commits, file should be deleted
-    # (This test verifies the deferred behavior)
-    assert not mock_storage.exists(file_name)
+    callbacks = []
+
+    def capture(callback):
+        callbacks.append(callback)
+
+    with patch("apps.materials.signals.transaction.on_commit", side_effect=capture) as on_commit, \
+        patch.object(public_material.file, "delete") as delete_mock:
+        # Hard delete (deferred until commit)
+        public_material.hard_delete()
+
+        on_commit.assert_called_once()
+        delete_mock.assert_not_called()
+        assert callbacks
+
+        # Simulate commit
+        callbacks[0]()
+        delete_mock.assert_called_once_with(save=False)
 
 
 # ============================================================================
@@ -201,12 +208,11 @@ def test_hard_delete_material_with_missing_file(public_material, mock_storage):
     """
     file_name = public_material.file.name
     
-    # Remove file from storage
-    mock_storage.delete(file_name)
-    assert not mock_storage.exists(file_name)
-    
-    # Hard delete should not raise
-    public_material.hard_delete()
+    # Hard delete should not raise even if file delete fails
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(public_material.file, "delete", side_effect=FileNotFoundError):
+        on_commit.side_effect = lambda callback: callback()
+        public_material.hard_delete()
     
     # Material should be deleted
     assert not Material.objects.filter(id=public_material.id).exists()
@@ -251,11 +257,11 @@ def test_soft_delete_then_restore_then_hard_delete(public_material, mock_storage
     public_material.restore()
     assert public_material.deleted_at is None
     
-    # Hard delete
-    public_material.hard_delete()
-    
-    # File should be deleted
-    assert not mock_storage.exists(file_name)
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(public_material.file, "delete") as delete_mock:
+        on_commit.side_effect = lambda callback: callback()
+        public_material.hard_delete()
+        delete_mock.assert_called_once_with(save=False)
 
 
 # ============================================================================
@@ -321,14 +327,11 @@ def test_file_cleanup_respects_file_field_value(public_material, mock_storage):
     """
     original_file = public_material.file.name
     
-    # Verify original file exists
-    assert mock_storage.exists(original_file)
-    
-    # Hard delete uses the file field value
-    public_material.hard_delete()
-    
-    # Original file should be deleted
-    assert not mock_storage.exists(original_file)
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(public_material.file, "delete") as delete_mock:
+        on_commit.side_effect = lambda callback: callback()
+        public_material.hard_delete()
+        delete_mock.assert_called_once_with(save=False)
 
 
 # ============================================================================

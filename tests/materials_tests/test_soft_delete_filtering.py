@@ -12,6 +12,7 @@ Coverage:
 import pytest
 from rest_framework import status
 from django.utils import timezone
+from unittest.mock import patch
 
 from apps.materials.models import Material
 
@@ -221,12 +222,12 @@ def test_filter_on_deleted_at_directly(soft_deleted_material, public_material):
     Can filter on deleted_at field directly.
     """
     # Filter for deleted
-    deleted = Material.objects.filter(deleted_at__isnull=False)
+    deleted = Material.all_objects.filter(deleted_at__isnull=False)
     assert soft_deleted_material in deleted
     assert public_material not in deleted
     
     # Filter for not deleted
-    not_deleted = Material.objects.filter(deleted_at__isnull=True)
+    not_deleted = Material.all_objects.filter(deleted_at__isnull=True)
     assert soft_deleted_material not in not_deleted
     assert public_material in not_deleted
 
@@ -264,15 +265,18 @@ def test_hard_delete_of_soft_deleted_material(soft_deleted_material, mock_storag
     file_name = soft_deleted_material.file.name
     material_id = soft_deleted_material.id
     
-    # Hard delete the soft-deleted material
-    soft_deleted_material.hard_delete()
+    with patch("apps.materials.signals.transaction.on_commit") as on_commit, \
+        patch.object(soft_deleted_material.file, "delete") as delete_mock:
+        on_commit.side_effect = lambda callback: callback()
+
+        # Hard delete the soft-deleted material
+        soft_deleted_material.hard_delete()
+        delete_mock.assert_called_once_with(save=False)
     
     # Material completely gone
     assert not Material.objects.filter(id=material_id).exists()
     assert not Material.all_objects.filter(id=material_id).exists()
     
-    # File deleted by signal
-    assert not mock_storage.exists(file_name)
 
 
 # ============================================================================

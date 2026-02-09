@@ -3,27 +3,42 @@ from .base import *  # noqa
 import os
 
 # ========================================
-# Database (Use SQLite for tests)
+# Database (Use PostgreSQL for tests)
 # ========================================
 
-# Use SQLite for tests to avoid PostgreSQL authentication issues
-# SQLite is perfect for testing as it's fast and requires no server
+# Use PostgreSQL for tests to avoid compatibility issues with SQLite
+# Tests run against a separate test database
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': ':memory:',  # Use in-memory database for speed
-        'CONN_MAX_AGE': 0,
-        'ATOMIC_REQUESTS': False,
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME', 'jlpt_mock_db') + '_test',
+        'USER': os.environ.get('DB_USER', 'postgres'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres'),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
+        'OPTIONS': {
+            'options': '-c search_path=public'
+        },
+        'CONN_MAX_AGE': 0,  # Disable connection pooling in tests
+        'ATOMIC_REQUESTS': False,  # Don't wrap requests in transactions (schema switching breaks this)
+        'TEST': {
+            'MIGRATE': False,
+        },
     }
 }
 
 # ========================================
-# Migrations (Enable for SQLite tests)
+# Migrations (Enable for tests)
 # ========================================
 
-# SQLite tests: enable migrations so Django creates tables from models
-# Remove any migration modules disabled in base (from 'from .base import *')
-MIGRATION_MODULES = {}  # Empty dict means use default migrations
+# Enable migrations so test database has all tables.
+# Required for multi-tenant apps where models live in tenant schemas.
+MIGRATION_MODULES = {}
+
+# In tests, migrate tenant apps into public schema by disabling routers.
+# This avoids missing tables for tenant models (materials, groups) during tests.
+DATABASE_ROUTERS = []
+
 
 # ========================================
 # Password Hashing (Faster for Tests)
@@ -102,16 +117,3 @@ SKIP_SCHEMA_READY_CHECK = True
 
 # Propagate exceptions for clearer test failures
 DEBUG_PROPAGATE_EXCEPTIONS = True
-
-# ========================================
-# Middleware Configuration (Tests)
-# ========================================
-
-# Disable problematic multi-tenant middleware for tests
-# These middleware cause transaction issues in test environment
-# Tests run against the public schema, no schema switching needed
-MIDDLEWARE = [
-    m for m in MIDDLEWARE 
-    if 'SchemaResetWrapperMiddleware' not in m
-    and 'TenantMiddleware' not in m
-]

@@ -1,0 +1,1 @@
+"""Mock tests app QA test suite."""

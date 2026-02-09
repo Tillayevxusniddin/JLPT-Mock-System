@@ -4,7 +4,6 @@ from django.db import transaction
 import logging
 
 from apps.core.tenant_utils import get_current_schema
-from apps.notifications.tasks import dispatch_ws_notification
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +76,7 @@ class NotificationService:
                 "updated_at": None,
             }
             try:
+                from apps.notifications.tasks import dispatch_ws_notification
                 dispatch_ws_notification.delay(user_id, payload)
             except Exception as e:
                 logger.error("Failed to enqueue WS notification for %s: %s", user_id, e)
@@ -110,6 +110,7 @@ class NotificationService:
             }
 
         try:
+            from apps.notifications.tasks import dispatch_ws_notification
             dispatch_ws_notification.delay(user_id, payload)
         except Exception as e:
             logger.error("Failed to enqueue WS notification for %s: %s", user_id, e)

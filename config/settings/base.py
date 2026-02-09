@@ -174,6 +174,10 @@ CELERY_BEAT_SCHEDULE = {
         # Alternatively, use crontab for specific times:
         # 'schedule': crontab(hour=2, minute=0),  # Run at 2 AM daily
     },
+    'auto-submit-stuck-submissions': {
+        'task': 'apps.attempts.tasks.auto_submit_stuck_submissions',
+        'schedule': 300.0,  # Run every 5 minutes
+    },
 }
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB
