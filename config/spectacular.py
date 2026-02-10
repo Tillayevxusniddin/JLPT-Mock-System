@@ -2,12 +2,36 @@
 """
 drf-spectacular OpenAPI schema configuration for multi-tenant JLPT system.
 
+- TenantAwareJWTAuthenticationScheme: Registers the custom JWT class with
+  drf-spectacular so the Authorize button and security locks appear correctly.
 - custom_preprocessing_hook: Excludes admin and health from the schema.
 - set_schema_for_spectacular: Switches to a tenant schema during schema generation so
   tenant-scoped models (e.g. Group, GroupMembership) are introspected correctly.
   Call from TenantAwareSpectacularAPIView; always pair with set_public_schema() in a
   finally block so the connection is reset after generation.
 """
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
+
+
+class TenantAwareJWTAuthenticationScheme(OpenApiAuthenticationExtension):
+    """
+    Tell drf-spectacular how to represent TenantAwareJWTAuthentication in the
+    OpenAPI schema. Maps it to a standard Bearer JWT security scheme so the
+    Swagger UI 'Authorize' button works correctly.
+    """
+    target_class = "apps.core.authentication.TenantAwareJWTAuthentication"
+    name = "jwtAuth"
+
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": (
+                "JWT authentication. Obtain tokens via **POST /api/v1/auth/login/**. "
+                "Enter the **access** token below (without the \"Bearer \" prefix)."
+            ),
+        }
 
 def custom_preprocessing_hook(endpoints):
     filtered = []

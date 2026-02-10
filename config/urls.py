@@ -13,6 +13,7 @@ from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
+from drf_spectacular.utils import extend_schema
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
@@ -49,6 +50,7 @@ class TenantAwareSpectacularAPIView(SpectacularAPIView):
     (e.g. Group, GroupMembership) are introspected. Always resets to public after.
     """
 
+    @extend_schema(exclude=True)
     def get(self, request, *args, **kwargs):
         set_schema_for_spectacular()
         try:

@@ -6,6 +6,7 @@ GroupListSerializer uses teacher_map from context when present (list optimizatio
 
 from django.db import transaction
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from apps.authentication.models import User
 from apps.authentication.serializers import SimpleUserSerializer
@@ -31,6 +32,7 @@ class GroupListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "student_count", "teacher_count", "created_at", "updated_at"]
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="List of teachers"))
     def get_teachers(self, obj):
         """
         Get teacher details for this group.
@@ -143,6 +145,7 @@ class GroupSerializer(serializers.ModelSerializer):
                 
         return group
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="List of teachers"))
     def get_teachers(self, obj):
         return GroupListSerializer(obj).get_teachers(obj)
 

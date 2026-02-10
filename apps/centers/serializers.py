@@ -3,6 +3,7 @@
 from rest_framework import serializers
 from django.db.models import Q
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from datetime import timedelta
 import uuid
 import logging
@@ -444,20 +445,23 @@ class GuestListSerializer(serializers.ModelSerializer):
             "invitation_code", "invitation_expires_at", "is_expired", "created_at"
         ]
     
+    @extend_schema_field(serializers.CharField(allow_null=True, help_text="Guest invitation code"))
     def get_invitation_code(self, obj):
         try:
             invitation = Invitation.objects.filter(target_user_id=obj.id, is_guest=True).first()
             return invitation.code if invitation else None
         except Exception:
             return None
-    
+
+    @extend_schema_field(serializers.DateTimeField(allow_null=True, help_text="Invitation expiration time"))
     def get_invitation_expires_at(self, obj):
         try:
             invitation = Invitation.objects.filter(target_user_id=obj.id, is_guest=True).first()
             return invitation.expires_at if invitation else None
         except Exception:
             return None
-    
+
+    @extend_schema_field(serializers.BooleanField(help_text="Whether the guest invitation has expired"))
     def get_is_expired(self, obj):
         # Guest expiration logic check
         try:

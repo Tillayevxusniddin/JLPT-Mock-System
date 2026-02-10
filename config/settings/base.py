@@ -339,9 +339,109 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
-# drf-spectacular: exclude admin and health from OpenAPI schema
+# ---------------------------------------------------------------------------
+# drf-spectacular – OpenAPI 3.0 schema generation
+# ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
+    # ── API metadata ──────────────────────────────────────────────────────
+    "TITLE": "Mikan – JLPT Mock Exam Platform API",
+    "DESCRIPTION": (
+        "Multi-tenant SaaS platform for Japanese Language Proficiency Test (JLPT) "
+        "preparation. Manage language centers, teachers, students, mock exams, "
+        "quizzes, homework assignments, and analytics.\n\n"
+        "## Authentication\n"
+        "All endpoints (except **Public – Contact** and **Authentication** login/register) "
+        "require a JWT bearer token. Obtain tokens via `POST /api/v1/auth/login/` and "
+        "include the **access** token in the `Authorization: Bearer <token>` header.\n\n"
+        "## Multi-Tenancy\n"
+        "Each language center is an isolated tenant. The JWT token automatically "
+        "switches the database schema to the user's center context.\n\n"
+        "## Roles\n"
+        "| Role | Description |\n"
+        "|------|-------------|\n"
+        "| **OWNER** | Platform super-admin – manages all centers |\n"
+        "| **CENTER_ADMIN** | Administers a single center |\n"
+        "| **TEACHER** | Creates exams, quizzes, assigns homework |\n"
+        "| **STUDENT** | Takes exams and views results |\n"
+        "| **GUEST** | Limited read-only access (pre-enrollment) |\n"
+    ),
+    "VERSION": "1.0.0",
+    "CONTACT": {
+        "name": "Mikan API Support",
+        "email": "admin@mikan.uz",
+        "url": "https://mikan.uz",
+    },
+    "LICENSE": {
+        "name": "Proprietary",
+    },
+    "TERMS_OF_SERVICE": "https://mikan.uz/terms/",
+
+    # ── Server URLs (Swagger 'Servers' dropdown) ─────────────────────────
+    "SERVERS": [
+        {"url": "http://localhost:8000", "description": "Local development"},
+        {"url": "https://api.mikan.uz", "description": "Production"},
+    ],
+
+    # ── Security (JWT) ───────────────────────────────────────────────────
+    "SECURITY": [{"jwtAuth": []}],
+
+    # ── Preprocessing ────────────────────────────────────────────────────
     "PREPROCESSING_HOOKS": ["config.spectacular.custom_preprocessing_hook"],
+
+    # ── Tag ordering (matches Swagger UI sidebar) ────────────────────────
+    "TAGS": [
+        {"name": "Authentication", "description": "Register, login, logout, password management, and avatar upload."},
+        {"name": "Users", "description": "User CRUD for CENTER_ADMIN and TEACHER roles."},
+        {"name": "Owner – Centers / Admins / Requests", "description": "Platform owner (super-admin) endpoints for center and subscription management."},
+        {"name": "Center Admin – Invitations / Profile / Guests", "description": "Center administrator endpoints for invitations, profile, and guest management."},
+        {"name": "Public – Contact", "description": "Unauthenticated endpoints for the public landing page."},
+        {"name": "Groups", "description": "Student groups within a center."},
+        {"name": "Group Memberships", "description": "Add/remove students from groups."},
+        {"name": "Materials", "description": "Supplementary learning materials (documents, audio, images)."},
+        {"name": "Mock Tests", "description": "Full JLPT mock exams."},
+        {"name": "Test Sections", "description": "Sections within a mock test (Vocabulary, Reading, Listening)."},
+        {"name": "Question Groups (Mondai)", "description": "Question groups (問題) within test sections."},
+        {"name": "Questions", "description": "Individual questions within question groups."},
+        {"name": "Quizzes", "description": "Standalone quizzes for practice."},
+        {"name": "Quiz Questions", "description": "Questions within quizzes."},
+        {"name": "Exam Assignments", "description": "Assign mock exams to student groups."},
+        {"name": "Homework Assignments", "description": "Assign homework (quizzes + mock tests) to groups."},
+        {"name": "Submissions", "description": "Student exam/homework submissions and results."},
+        {"name": "Submissions – Exam", "description": "Exam-specific submission flows (start, submit, results)."},
+        {"name": "Submissions – Homework", "description": "Homework-specific submission flows."},
+        {"name": "Notifications", "description": "In-app notification management."},
+        {"name": "Analytics – Owner", "description": "Platform-wide analytics for the owner."},
+        {"name": "Analytics – Center Admin", "description": "Center-level analytics for administrators."},
+        {"name": "Analytics – Teacher", "description": "Teacher performance and class analytics."},
+        {"name": "Analytics – Student", "description": "Student progress and score analytics."},
+    ],
+
+    # ── Enum collision overrides ─────────────────────────────────────────
+    "ENUM_NAME_OVERRIDES": {
+        "ExamRoomStatusEnum": "apps.assignments.models.ExamAssignment.RoomStatus",
+        "SubmissionStatusEnum": "apps.attempts.models.Submission.Status",
+        "CenterStatusEnum": "apps.centers.models.Center.Status",
+        "MockTestStatusEnum": "apps.mock_tests.models.MockTest.Status",
+        "UserRoleEnum": "apps.authentication.models.User.Role",
+        "InvitationStatusEnum": "apps.centers.models.Invitation.STATUS_CHOICES",
+        "InvitationRoleEnum": "apps.centers.models.Invitation.ROLE_CHOICES",
+        "ContactRequestStatusEnum": "apps.centers.models.ContactRequest.STATUS_CHOICES",
+    },
+
+    # ── Schema behaviour ─────────────────────────────────────────────────
+    "SCHEMA_PATH_PREFIX": "/api/v[0-9]+",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": False,
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+        "displayOperationId": False,
+        "filter": True,
+        "docExpansion": "list",
+        "defaultModelsExpandDepth": -1,
+        "tagsSorter": "alpha",
+    },
+    "SWAGGER_UI_FAVICON_HREF": "/static/images/favicon-32x32.png",
 }
 
 #TODO: need to consider

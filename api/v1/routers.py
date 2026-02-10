@@ -1,5 +1,5 @@
 #api/v1/routers.py
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.authentication.views import UserViewSet
 from apps.centers.views import (
@@ -24,7 +24,7 @@ from apps.attempts.views import SubmissionViewSet
 from apps.notifications.views import NotificationViewSet
 
 
-api_router = DefaultRouter()
+api_router = SimpleRouter()
 
 # Users (CENTER_ADMIN and TEACHER management)
 api_router.register(

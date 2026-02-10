@@ -3,6 +3,7 @@ import os
 import mimetypes
 import logging
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from .models import Material
 from apps.core.serializers import UserSummarySerializer
 from apps.groups.models import Group
@@ -16,14 +17,14 @@ try:
 except ImportError:
     HAS_MAGIC = False
 
-class GroupSummarySerializer(serializers.ModelSerializer):
+class MaterialGroupSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = ['id', 'name']
 
 class MaterialSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
-    groups = GroupSummarySerializer(many=True, read_only=True)
+    groups = MaterialGroupSummarySerializer(many=True, read_only=True)
     group_ids = serializers.ListField(
         child=serializers.UUIDField(),
         write_only=True,
@@ -54,6 +55,7 @@ class MaterialSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by", "groups"]
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         user_map = self.context.get('user_map')
         if user_map is not None and obj.created_by_id:

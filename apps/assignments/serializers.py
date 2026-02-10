@@ -6,6 +6,7 @@ Assignments serializers. Visibility, validation rules, and student status
 
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
+from drf_spectacular.utils import extend_schema_field
 from .models import ExamAssignment, HomeworkAssignment
 from .services import validate_assignment_payload, validate_user_ids_belong_to_tenant
 from apps.groups.models import Group
@@ -59,6 +60,7 @@ class ExamAssignmentSerializer(serializers.ModelSerializer):
             deleted_at__isnull=True,
         )
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         """Get user from user_map (no schema switch in serializer loop)."""
         if not obj.created_by_id:
@@ -180,6 +182,7 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
             "mock_tests", "quizzes"
         ]
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="Assigned mock tests"))
     def get_mock_tests(self, obj):
         """Get list of assigned MockTests."""
         from apps.mock_tests.serializers import MockTestSerializer
@@ -187,7 +190,8 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
             {"id": str(mt.id), "title": mt.title, "level": mt.level}
             for mt in obj.mock_tests.all()
         ]
-    
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="Assigned quizzes"))
     def get_quizzes(self, obj):
         """Get list of assigned Quizzes."""
         return [
@@ -195,6 +199,7 @@ class HomeworkAssignmentSerializer(serializers.ModelSerializer):
             for q in obj.quizzes.all()
         ]
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         """Get user from user_map (no schema switch in serializer loop)."""
         if not obj.created_by_id:
@@ -411,6 +416,7 @@ class HomeworkDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         if not obj.created_by_id:
             return None
@@ -427,6 +433,7 @@ class HomeworkDetailSerializer(serializers.ModelSerializer):
         self._submissions_map = _get_submissions_map_for_homework(instance, user_id)
         return super().to_representation(instance)
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="Assigned mock tests with student status"))
     def get_mock_tests(self, obj):
         subs_map = getattr(self, "_submissions_map", None)
         if subs_map is None:
@@ -446,6 +453,7 @@ class HomeworkDetailSerializer(serializers.ModelSerializer):
             for mt in obj.mock_tests.all()
         ]
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="Assigned quizzes with student status"))
     def get_quizzes(self, obj):
         subs_map = getattr(self, "_submissions_map", None)
         if subs_map is None:

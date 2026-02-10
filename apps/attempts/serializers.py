@@ -6,6 +6,7 @@ Documented in apps/attempts/swagger.py.
 """
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from .models import Submission
 from apps.core.serializers import user_display_from_map
 from apps.mock_tests.models import MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
@@ -390,6 +391,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             "score", "results", "created_at", "updated_at",
         ]
 
+    @extend_schema_field(serializers.CharField(allow_null=True, help_text="Assignment title"))
     def get_assignment_title(self, obj):
         if obj.exam_assignment:
             return obj.exam_assignment.title
@@ -397,6 +399,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             return obj.homework_assignment.title
         return None
 
+    @extend_schema_field(serializers.ChoiceField(choices=["exam", "homework"], allow_null=True))
     def get_assignment_type(self, obj):
         if obj.exam_assignment:
             return "exam"
@@ -404,6 +407,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             return "homework"
         return None
 
+    @extend_schema_field(serializers.CharField(help_text="Student display name"))
     def get_student_display(self, obj):
         user_map = self.context.get("user_map")
         return user_display_from_map(user_map, obj.user_id)

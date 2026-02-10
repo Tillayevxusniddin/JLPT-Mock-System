@@ -623,7 +623,7 @@ mock_test_viewset_schema = extend_schema_view(
                     "pass_score": 90,
                     "total_score": 180,
                     "sections": [
-                        {"id": "dd0e8400-...", "name": "Vocabulary (Moji-Goi)", "question_groups": [...]}
+                        {"id": "dd0e8400-...", "name": "Vocabulary (Moji-Goi)", "question_groups": ["..."]}
                     ],
                     "created_at": "2026-02-10T14:30:00Z",
                     "updated_at": "2026-02-10T14:30:00Z"

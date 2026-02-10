@@ -522,6 +522,13 @@ owner_center_admin_viewset_schema = extend_schema_view(
 # =============================================================================
 
 center_admin_center_viewset_schema = extend_schema_view(
+    list=extend_schema(
+        tags=["Center Admin – Invitations / Profile / Guests"],
+        summary="List my center",
+        description="Returns the center(s) the authenticated Center Admin belongs to. "
+                    "In practice this always returns a single-item list. TEACHER/STUDENT receive 403.",
+        responses={200: CenterSerializer(many=True), 401: RESP_401, 403: RESP_403},
+    ),
     retrieve=extend_schema(
         tags=["Center Admin – Invitations / Profile / Guests"],
         summary="Get my center",
@@ -759,6 +766,20 @@ When Owner upgrades a center from FREE → BASIC/PRO/ENTERPRISE:
 """
 
 owner_subscription_viewset_schema = extend_schema_view(
+    create=extend_schema(
+        tags=["Owner – Centers / Admins / Requests"],
+        summary="Create subscription",
+        description="**Owner only.** Manually create a subscription for a center. "
+                    "Normally subscriptions are auto-created when a center is created; "
+                    "use this only for exceptional cases.",
+        request=SubscriptionDetailSerializer,
+        responses={
+            201: SubscriptionDetailSerializer,
+            400: RESP_400,
+            401: RESP_401,
+            403: RESP_403,
+        },
+    ),
     list=extend_schema(
         tags=["Owner – Centers / Admins / Requests"],
         summary="List all subscriptions",

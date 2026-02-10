@@ -218,6 +218,7 @@ RESULTS_JLPT_EXAMPLE = {
 }
 
 submission_viewset_schema = extend_schema_view(
+    create=extend_schema(exclude=True),
     list=extend_schema(
         tags=["Submissions"],
         summary="List submissions",

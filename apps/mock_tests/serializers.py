@@ -7,6 +7,7 @@ apps.mock_tests.swagger. correct_option_index is auto-calculated from options.
 from django.db import transaction
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
+from drf_spectacular.utils import extend_schema_field
 
 from .models import MockTest, TestSection, QuestionGroup, Question, Quiz, QuizQuestion
 from .services import validate_mock_test_editable, validate_child_object_editable
@@ -191,6 +192,7 @@ class MockTestSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by", "sections"]
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         """Get user from user_map (no schema switch); created_by_id is stored as user.id (int)."""
         if not obj.created_by_id:
@@ -311,6 +313,7 @@ class QuizSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by", "questions"]
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Creator info"))
     def get_created_by(self, obj):
         """Get user information from public schema."""
         if not obj.created_by_id:

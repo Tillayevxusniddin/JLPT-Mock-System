@@ -10,6 +10,7 @@ import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
+from drf_spectacular.utils import extend_schema_field
 from django.template.loader import render_to_string
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -185,6 +186,7 @@ class UserListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "role", "center", "is_approved"]
 
+    @extend_schema_field(serializers.CharField(allow_null=True, help_text="Center avatar URL"))
     def get_center_avatar(self, obj):
         if not obj.center_id:
             return None
@@ -218,12 +220,14 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "role", "center", "is_approved"]
     
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="List of groups"))
     def get_my_groups(self, obj):
         my_groups_map = self.context.get("my_groups_map") or {}
         if obj.id in my_groups_map:
             return my_groups_map[obj.id]
         return get_user_groups_from_tenant(obj)
 
+    @extend_schema_field(serializers.DictField(allow_null=True, help_text="Center info object"))
     def get_center_info(self, obj):
         if not obj.center_id:
             return None
@@ -263,6 +267,7 @@ class UserManagementSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "role", "created_at", "email"]
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField(), help_text="List of groups"))
     def get_my_groups(self, obj):
         my_groups_map = self.context.get("my_groups_map") or {}
         if obj.id in my_groups_map:
