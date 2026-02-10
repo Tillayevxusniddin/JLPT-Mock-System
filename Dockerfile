@@ -33,10 +33,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install only runtime dependencies (libpq5, postgresql-client for pg_isready)
+# Install only runtime dependencies:
+#   - libpq5: PostgreSQL client library (required by psycopg2)
+#   - postgresql-client: provides pg_isready (used by wait_for_postgres)
+#   - redis-tools: provides redis-cli (used by wait_for_redis)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     postgresql-client \
+    redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (UID 1000 for consistency with volumes)
@@ -62,9 +66,9 @@ USER app
 # Expose standard ports (actual port depends on service)
 EXPOSE 8000 8001
 
-# Health check – verify Django is responsive
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=5)" || exit 1
+# NOTE: No Dockerfile-level HEALTHCHECK. Each service (web, daphne, celery,
+# beat) listens on different ports or no port at all. Per-service healthchecks
+# are defined in docker-compose.yml and docker-compose.prod.yml instead.
 
 # Entrypoint: robust startup script that handles all services
 # Usage:

@@ -1,44 +1,84 @@
 """
 OpenAPI / Swagger documentation for the attempts app (drf-spectacular).
 
-The attempts app is the engine between assignments and results: **Submissions** for
+The attempts app is the scoring heart between assignments and results: **Submissions** for
 exams (one MockTest per ExamAssignment) and homework (MockTest or Quiz per item).
 
-**Security & anti-cheat (visibility isolation):**
-- **start-exam** and **homework-start** return a **sanitized** paper: the response MUST
-  NOT include `correct_option_index` or `is_correct` in any question/option. Only
-  option text and structure are returned so students cannot see correct answers.
-- Stored **results** after grading do not expose `correct_index`; only `correct`
-  (bool), `score`, and `selected_index` (student's choice) are stored.
+================================================================================
+EXAM / HOMEWORK LIFECYCLE STATE MACHINE
+================================================================================
+
+**Status values:** STARTED → (SUBMITTED) → GRADED
+
+**Current API transitions:**
+- `start-exam` / `homework-start` creates **STARTED** submissions.
+- `submit-exam` / `submit-homework` grade immediately and set **GRADED**.
 
 **Immutability:**
-- Only **STARTED** submissions can be submitted. Once **GRADED**, re-submit and
-  edit/delete are blocked with **400** or **403**.
-- **PUT/PATCH/DELETE** on a submission with status GRADED return **400**:
-  \"Cannot modify a graded submission. Results are immutable.\"
+- Only **STARTED** can be submitted. Once **GRADED**, re-submit and edit/delete are blocked.
+- PUT/PATCH/DELETE on GRADED → 400: "Cannot modify a graded submission. Results are immutable."
 
-**Snapshot & historical integrity:**
-- At grading time, **create_snapshot** saves the full MockTest/Quiz structure
-  (including correct answers) into `Submission.snapshot`. If a teacher later
-  deletes a question or changes the correct answer, the student's historical
-  result remains unchanged.
+================================================================================
+ANSWER PROTECTION (ANTI-CHEAT)
+================================================================================
 
-**JLPT scoring engine:**
-- **Sectional pass:** FAIL if total score is above pass mark but any single
-  section is below minimum (e.g. <19 for N1–N3).
-- **N4/N5:** Vocabulary, Grammar, and Reading are aggregated into one section
-  (120 pts, min 38); Listening separate (60 pts, min 19).
-- All calculations use **Decimal** to avoid floating-point errors.
+**start-exam** and **homework-start** return a **sanitized** paper. The response MUST NOT include:
+- Question.correct_option_index
+- Option.is_correct
 
-**Workflow:**
-- **start-exam** is only allowed when **ExamAssignment.status** is **OPEN**
-  (enforced by CanStartExam permission and StartExamService).
-- **Time taken:** `time_taken_seconds` = completed_at − started_at (for dashboard).
+Options are returned with text only. This is enforced by `ExamQuestionSerializer` and
+`QuizQuestionPaperSerializer` which strip `is_correct` and exclude `correct_option_index`.
 
-**Role-based queryset & performance:**
-- **TEACHER:** Only submissions from groups where they teach.
-- **STUDENT/GUEST:** Only their own submissions.
+================================================================================
+SECURITY ISOLATION (TENANT + OWNERSHIP)
+================================================================================
+
+- **Students/GUests can only access their own submissions.**
+- Cross-center submission attempts are rejected with 403.
+- TEACHER visibility is limited to groups they teach; CENTER_ADMIN sees all.
+
+================================================================================
+JLPT SCORING ENGINE (RESULTS JSON)
+================================================================================
+
+**MockTest Results (`results` JSONField):**
+- `total_score`: float
+- `sections`: map of section_id → {section_name, section_type, score, max_score, questions}
+- `jlpt_result`: {level, pass_mark, passed, section_results, total_passed, all_sections_passed}
+- `resource_type`: "mock_test"
+
+**Quiz Results (`results` JSONField):**
+- `total_score`, `max_score`, `correct_count`, `total_count`, `percentage`
+- `questions`: map of question_id → {correct, score, points, selected_index}
+- `resource_type`: "quiz"
+
+**Pass/Fail Rules:**
+- **N1–N3:** 3 sections — Language Knowledge, Reading, Listening (min 19 each)
+- **N4–N5:** 2 sections — Language+Reading combined (min 38), Listening (min 19)
+- **PASS** requires both `total_passed` and `all_sections_passed`
+
+================================================================================
+RACE-CONDITION PROTECTION & SINGLE ATTEMPT GUARANTEE
+================================================================================
+
+- DB-level **UniqueConstraint** enforces one attempt per user per assignment.
+- Start-exam uses `transaction.atomic()`; on IntegrityError:
+    - If existing is **STARTED**, returns/resumes.
+    - If **SUBMITTED/GRADED**, returns 400 (already completed).
+
+================================================================================
+AUTO-SUBMIT GRACE PERIOD (SERVER-SIDE)
+================================================================================
+
+- After the deadline, the server allows a **10-minute grace period** before auto-submit locks.
+- After grace ends, submissions are locked and return 400 if attempted.
+
+================================================================================
+PERFORMANCE NOTES
+================================================================================
+
 - List view batch-fetches student names via **user_map** (public schema) to avoid N+1.
+- `time_taken_seconds` = completed_at − started_at (dashboard).
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -55,7 +95,10 @@ from .serializers import (
 )
 
 RESP_400 = OpenApiResponse(
-    description="Validation error: not STARTED, missing answers, past deadline, or re-submit on GRADED.",
+    description=(
+        "Validation error: not STARTED, missing answers, past deadline, already completed, "
+        "exam not OPEN, or resource not PUBLISHED/ACTIVE."
+    ),
     examples=[
         OpenApiExample(
             "Already submitted",
@@ -67,11 +110,43 @@ RESP_400 = OpenApiResponse(
             value={"detail": "Cannot modify a graded submission. Results are immutable."},
             response_only=True,
         ),
+        OpenApiExample(
+            "Exam not open",
+            value={"detail": "Exam is not open. Current status: CLOSED"},
+            response_only=True,
+        ),
+        OpenApiExample(
+            "Homework deadline passed",
+            value={"detail": "Homework deadline has passed."},
+            response_only=True,
+        ),
+        OpenApiExample(
+            "MockTest not published",
+            value={"detail": "Mock test is not published."},
+            response_only=True,
+        ),
     ],
 )
 RESP_401 = OpenApiResponse(description="Authentication required.")
 RESP_403 = OpenApiResponse(
-    description="Permission denied: e.g. only students can start/submit; exam not OPEN."
+    description="Permission denied: only students can start/submit; cross-center or ownership violation.",
+    examples=[
+        OpenApiExample(
+            "Cross-center submission",
+            value={"detail": "Cross-center submission is not allowed."},
+            response_only=True,
+        ),
+        OpenApiExample(
+            "Not owner",
+            value={"detail": "You can only submit your own submissions."},
+            response_only=True,
+        ),
+        OpenApiExample(
+            "Role blocked",
+            value={"detail": "Only students can start exams."},
+            response_only=True,
+        ),
+    ],
 )
 RESP_404 = OpenApiResponse(description="Submission or assignment not found.")
 
@@ -83,31 +158,58 @@ ANSWERS_EXAMPLE = {
 }
 ANSWERS_DESCRIPTION = "Object: question UUID (string) -> selected option index (0-based integer)."
 
+RESULTS_SCHEMA_DESCRIPTION = (
+    "Results JSON schema for frontend charts: "
+    "MockTest: {total_score, sections{section_id:{section_name, section_type, score, max_score, questions}}, "
+    "jlpt_result{level, pass_mark, passed, section_results, total_passed, all_sections_passed}, resource_type}. "
+    "Quiz: {total_score, max_score, correct_count, total_count, percentage, questions, resource_type}."
+)
+
 # ---- Results response (JLPT): sections breakdown + jlpt_result ----
 RESULTS_JLPT_EXAMPLE = {
-    "total_score": 95.5,
+    "total_score": 112.0,
     "sections": {
-        "section-uuid-1": {
-            "section_id": "section-uuid-1",
+        "section-uuid-vocab": {
+            "section_id": "section-uuid-vocab",
             "section_name": "Vocabulary",
             "section_type": "VOCAB",
-            "score": 28.0,
+            "score": 32.0,
             "max_score": 60.0,
             "questions": {
                 "question-uuid-1": {"correct": True, "score": 1.0, "selected_index": 2},
                 "question-uuid-2": {"correct": False, "score": 0.0, "selected_index": 0},
             },
         },
+        "section-uuid-reading": {
+            "section_id": "section-uuid-reading",
+            "section_name": "Reading",
+            "section_type": "GRAMMAR_READING",
+            "score": 40.0,
+            "max_score": 60.0,
+            "questions": {
+                "question-uuid-3": {"correct": True, "score": 2.0, "selected_index": 1},
+            },
+        },
+        "section-uuid-listening": {
+            "section_id": "section-uuid-listening",
+            "section_name": "Listening",
+            "section_type": "LISTENING",
+            "score": 40.0,
+            "max_score": 60.0,
+            "questions": {
+                "question-uuid-4": {"correct": True, "score": 2.0, "selected_index": 3},
+            },
+        },
     },
     "jlpt_result": {
         "level": "N2",
-        "total_score": 95.5,
+        "total_score": 112.0,
         "pass_mark": 90,
         "passed": True,
         "section_results": {
             "language_knowledge": {"score": 32.0, "min_required": 19, "passed": True},
-            "reading": {"score": 35.5, "min_required": 19, "passed": True},
-            "listening": {"score": 28.0, "min_required": 19, "passed": True},
+            "reading": {"score": 40.0, "min_required": 19, "passed": True},
+            "listening": {"score": 40.0, "min_required": 19, "passed": True},
         },
         "total_passed": True,
         "all_sections_passed": True,
@@ -133,6 +235,10 @@ submission_viewset_schema = extend_schema_view(
     retrieve=extend_schema(
         tags=["Submissions"],
         summary="Get submission",
+        description=(
+            "Retrieve a submission. **Security isolation:** students/guests can only access their own submissions; "
+            "cross-center access is forbidden."
+        ),
         responses={200: SubmissionSerializer, 401: RESP_401, 403: RESP_403, 404: RESP_404},
     ),
     update=extend_schema(
@@ -159,7 +265,9 @@ submission_viewset_schema = extend_schema_view(
         description=(
             "Start an exam attempt. Returns **sanitized** exam paper (MockTest structure "
             "without correct_option_index or is_correct). Only STUDENT/GUEST. "
-            "**ExamAssignment.status must be OPEN** (enforced by CanStartExam)."
+            "**ExamAssignment.status must be OPEN** (enforced by CanStartExam). "
+            "**Race-safe:** one attempt per user; if already STARTED, the existing attempt is resumed; "
+            "if already SUBMITTED/GRADED, returns 400."
         ),
         request={
             "application/json": {
@@ -209,7 +317,8 @@ submission_viewset_schema = extend_schema_view(
         summary="Submit exam",
         description=(
             "Submit exam answers. Only **STARTED** submissions; once submitted status becomes "
-            "**GRADED** (immutable). Re-submit on GRADED returns 400. Grading is atomic."
+            "**GRADED** (immutable). Re-submit on GRADED returns 400. Grading is atomic. "
+            "**Security:** students can submit only their own submissions; cross-center rejected (403)."
         ),
         request={
             "application/json": {
@@ -258,7 +367,8 @@ submission_viewset_schema = extend_schema_view(
         summary="My exam results",
         description=(
             "GET student's own exam result. Only if **ExamAssignment.is_published** is True. "
-            "Includes time_taken_seconds (completed_at − started_at) and percentage for dashboard."
+            "Includes time_taken_seconds (completed_at − started_at) and percentage for dashboard. "
+            f"{RESULTS_SCHEMA_DESCRIPTION}"
         ),
         parameters=[OpenApiParameter(name="exam_assignment_id", type=str, required=True)],
         responses={
@@ -266,16 +376,16 @@ submission_viewset_schema = extend_schema_view(
                 description="submission (score, results, time_taken_seconds, percentage) if published.",
                 examples=[
                     OpenApiExample(
-                        "Success",
+                        "GRADED result (JLPT breakdown)",
                         value={
                             "submission": {
                                 "id": "uuid",
                                 "user_id": 1,
                                 "status": "GRADED",
-                                "score": 95.5,
+                                "score": 112.0,
                                 "results": RESULTS_JLPT_EXAMPLE,
                                 "time_taken_seconds": 3600,
-                                "percentage": 53.06,
+                                "percentage": 62.22,
                             },
                             "is_published": True,
                         },
@@ -293,7 +403,8 @@ submission_viewset_schema = extend_schema_view(
         summary="Homework start",
         description=(
             "Start a homework item (MockTest or Quiz). Returns **sanitized** item paper "
-            "(no correct_option_index or is_correct). Deadline must not have passed."
+            "(no correct_option_index or is_correct). Deadline must not have passed. "
+            "**Grace period:** 10 minutes after deadline before auto-submit lock."
         ),
         request={
             "application/json": {
@@ -344,7 +455,8 @@ submission_viewset_schema = extend_schema_view(
         summary="Show result (practice)",
         description=(
             "Practice mode: returns grading result **WITHOUT** saving or locking. "
-            "**GUEST forbidden.** Submission stays STARTED; student can retry before final submit."
+            "**GUEST forbidden.** Submission stays STARTED; student can retry before final submit. "
+            f"{RESULTS_SCHEMA_DESCRIPTION}"
         ),
         request={
             "application/json": {
@@ -395,7 +507,9 @@ submission_viewset_schema = extend_schema_view(
         description=(
             "Final submit: grades and **locks** submission (status GRADED). Only STARTED. "
             "If homework_assignment.show_results_immediately is True, returns results in response. "
-            "Re-submit on GRADED returns 400."
+            "Re-submit on GRADED returns 400. "
+            "**Grace period:** 10 minutes after deadline before auto-submit lock. "
+            f"{RESULTS_SCHEMA_DESCRIPTION}"
         ),
         request={
             "application/json": {

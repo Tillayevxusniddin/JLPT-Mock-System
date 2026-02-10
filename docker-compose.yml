@@ -1,5 +1,13 @@
-# Multi-Tenant JLPT (mikan.uz) – Django, Daphne, Celery, Redis, PostgreSQL
-# Celery workers start only after Postgres and Redis are ready.
+# docker-compose.yml – Base compose for Multi-Tenant JLPT (mikan.uz)
+#
+# Local development: docker-compose up
+# Production:        docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file defines ALL services with development-friendly defaults:
+# - Source code mounted (.:/app) for hot-reload
+# - Ports exposed for direct access (8000, 8001, 5432, 6379)
+# - Development Django settings (DEBUG=True, no SSL)
+# - Per-service healthchecks (web, daphne, celery, beat)
 
 version: '3.8'
 
@@ -29,12 +37,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: jlpt_redis
+    # Require password authentication via CLI flag (Alpine image ignores
+    # environment variables -- the only reliable way is --requirepass).
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis123}
     ports:
       - '6379:6379'
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redis123}', 'ping']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -42,7 +53,7 @@ services:
   web:
     build: .
     container_name: jlpt_web
-    command: entrypoint.sh web
+    command: ['entrypoint.sh', 'web']
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
@@ -51,11 +62,14 @@ services:
       - '8000:8000'
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
+      DJANGO_SETTINGS_MODULE: config.settings.development
       DB_HOST: db
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      # Redis: Cache on db/1, Celery on db/0 (matches production layout)
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     depends_on:
       db:
         condition: service_healthy
@@ -78,14 +92,18 @@ services:
   daphne:
     build: .
     container_name: jlpt_daphne
-    command: daphne -b 0.0.0.0 -p 8001 config.asgi:application
+    command: ['entrypoint.sh', 'daphne']
     volumes:
       - .:/app
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
+      DJANGO_SETTINGS_MODULE: config.settings.development
       DB_HOST: db
-      REDIS_URL: redis://redis:6379/0
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     depends_on:
       db:
         condition: service_healthy
@@ -96,20 +114,33 @@ services:
     restart: unless-stopped
     ports:
       - '8001:8001'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'python -c "import socket; s=socket.socket(); s.settimeout(2); s.connect((''127.0.0.1'', 8001)); s.close()"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   celery_worker:
     build: .
     container_name: jlpt_celery_worker
-    command: celery -A config worker -l info
+    command: ['entrypoint.sh', 'celery']
     volumes:
       - .:/app
       - media_volume:/app/media
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
+      DJANGO_SETTINGS_MODULE: config.settings.development
       DB_HOST: db
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     depends_on:
       db:
         condition: service_healthy
@@ -118,19 +149,28 @@ services:
       web:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'celery -A config inspect ping --timeout 10 || exit 1']
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
   celery_beat:
     build: .
     container_name: jlpt_celery_beat
-    command: celery -A config beat -l info
+    command: ['entrypoint.sh', 'beat']
     volumes:
       - .:/app
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
+      DJANGO_SETTINGS_MODULE: config.settings.development
       DB_HOST: db
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     depends_on:
       db:
         condition: service_healthy
@@ -139,6 +179,12 @@ services:
       web:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'celery -A config inspect ping --timeout 10 || exit 1']
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres_data:

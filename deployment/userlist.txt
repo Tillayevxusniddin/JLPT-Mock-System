@@ -17,6 +17,9 @@
 #   - Export POSTGRES_PASSWORD before running: export POSTGRES_PASSWORD=<secure-password>
 
 # Main PostgreSQL user (same as POSTGRES_USER and POSTGRES_PASSWORD from .env)
+# IMPORTANT: This is a TEMPLATE file. At runtime, the entrypoint script runs
+# envsubst to replace ${POSTGRES_PASSWORD} with the actual value.
+# Do NOT hardcode passwords here.
 "postgres" "${POSTGRES_PASSWORD}"
 
 # Optional: Additional read-only user for analytics/reporting

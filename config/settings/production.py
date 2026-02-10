@@ -1,8 +1,6 @@
-#config/settings/production.py
-from django.conf.global_settings import SECURE_PROXY_SSL_HEADER
-from django.template.defaultfilters import default
+# config/settings/production.py
 import os
-from .base import *
+from .base import *  # noqa: F401,F403
 
 # ========================================
 # SECURITY SETTINGS
@@ -10,8 +8,13 @@ from .base import *
 
 DEBUG = False
 
-if not env("SECRET_KEY", default=None):
-    raise ValueError("SECRET_KEY is not set") 
+# Validate that the production secret key is explicitly set (must match the
+# env var name used in base.py: DJANGO_SECRET_KEY).
+if not env("DJANGO_SECRET_KEY", default=None):
+    raise ValueError(
+        "DJANGO_SECRET_KEY must be set in production. "
+        "Generate one with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'"
+    ) 
 
 # ========================================
 # SSL/HTTPS Configuration
@@ -136,9 +139,11 @@ CORS_URLS_REGEX = r'^/(api)/.*$'
 # SESSION_COOKIE_SECURE = True  # Only send over HTTPS
 # SESSION_COOKIE_AGE = 86400  # 24 hours
 
-# CSRF Cookie settings (for cross-origin frontend)
+# CSRF Cookie settings
+# Lax is secure for subdomain architecture (.mikan.uz); "None" is only needed
+# for fully cross-origin frontends (e.g. Netlify on a different TLD).
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
-CSRF_COOKIE_SAMESITE = "None"  # Required for cross-origin requests
+CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = True  # Only send over HTTPS
 
 # CSRF Trusted Origins (for frontend on Netlify and local development)
@@ -177,11 +182,24 @@ if not ALLOWED_HOSTS:
 # Database
 # ========================================
 
-# Ensure database connection uses SSL if configured
+# Ensure database connection uses SSL if configured.
+# IMPORTANT: Merge into existing OPTIONS (preserves search_path=public from base.py)
+# instead of replacing the entire dict.
 if env.bool("DB_REQUIRE_SSL", default=True):
-    DATABASES["default"]["OPTIONS"] = {
-        "sslmode": "require",
-    }
+    DATABASES["default"].setdefault("OPTIONS", {})
+    DATABASES["default"]["OPTIONS"]["sslmode"] = "require"
+
+# PgBouncer compatibility: CONN_MAX_AGE must be 0 when using PgBouncer in
+# transaction pooling mode.  PgBouncer returns connections to the pool after
+# each transaction, so Django must not cache / reuse them across requests.
+# (base.py sets CONN_MAX_AGE=600 for direct-to-Postgres dev environments.)
+DATABASES["default"]["CONN_MAX_AGE"] = 0
+
+# ---------------------------------------------------------------------------
+# django-celery-beat: Required for DatabaseScheduler used by Celery Beat.
+# Must be in INSTALLED_APPS so Django creates the periodic-task tables.
+# ---------------------------------------------------------------------------
+INSTALLED_APPS += ["django_celery_beat"]  # noqa: F405
 
 
 # ========================================
@@ -408,11 +426,13 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://127.0.0.1:
 # Django Axes (Brute Force Protection)
 # ========================================
 
-# Already configured in base.py, but ensure it's enabled
+# Already configured in base.py; re-affirm production values.
 AXES_ENABLED = True
 AXES_FAILURE_LIMIT = 10
 AXES_COOLOFF_TIME = 1  # Hours
-AXES_LOCKOUT_PARAMETERS = ["username", "ip_address"]
+# Composite key: lock only when BOTH email AND ip_address match (consistent with base.py).
+# Using AXES_USERNAME_FORM_FIELD = "email" set in base.py.
+AXES_LOCKOUT_PARAMETERS = [["email", "ip_address"]]
 
 
 # ========================================

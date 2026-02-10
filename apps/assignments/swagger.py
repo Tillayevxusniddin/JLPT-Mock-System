@@ -2,31 +2,143 @@
 OpenAPI / Swagger documentation for the assignments app (drf-spectacular).
 
 Assignments bridge educational resources and students: **ExamAssignment** (one MockTest
-per exam room) and **HomeworkAssignment** (multiple MockTests/Quizzes, groups and/or
-assigned_user_ids).
+per exam room with OPEN/CLOSED visibility control) and **HomeworkAssignment** (multiple
+MockTests/Quizzes, assigned to groups and/or individual users with deadlines).
+
+================================================================================
+ROLE-BASED ACCESS CONTROL (RBAC) MATRIX
+================================================================================
 
 **Visibility (get_queryset):**
-- **CENTER_ADMIN:** All assignments in the center.
-- **TEACHER:** Only assignments linked to groups where they are members with role TEACHER.
-- **STUDENT:** **Exams** — assignments linked to their group. **Homework** — assignments
-  linked to their group OR where their User ID is in `assigned_user_ids`.
-- **GUEST:** Only homework where their User ID is in `assigned_user_ids`.
-- List views use `.distinct()` where needed to avoid duplicate rows.
 
-**ExamAssignment.status (CLOSED / OPEN):**
-- **CLOSED:** Students do not see this assignment in the exam room.
-- **OPEN:** Students can see and access the assignment in the exam room. Teacher/CenterAdmin
-  controls status; changing to OPEN makes the exam visible to assigned groups.
+| Role          | ExamAssignment         | HomeworkAssignment                      |
+|---------------|------------------------|-----------------------------------------|
+| CENTER_ADMIN  | All assignments        | All assignments                         |
+| TEACHER       | Groups they teach ONLY | Groups they teach ONLY                  |
+| STUDENT       | Assigned groups only   | Assigned groups OR user_id in assigned_user_ids |
+| GUEST         | NONE                   | User ID in assigned_user_ids only       |
 
-**Resource constraints & validation:**
-- Only **PUBLISHED** MockTests and **ACTIVE** Quizzes can be assigned.
-- Homework **deadline** must be in the future (400 if past).
-- **assigned_user_ids:** List of **integers** (User IDs from the **public schema**). All IDs
-  must exist in the public User table and belong to the **current center**; otherwise 400.
+**Create/Update/Delete Permissions:**
+- **CENTER_ADMIN:** Can manage any assignment, any groups
+- **TEACHER:** Can manage assignments for groups where they have TEACHER role
+  (enforced via GroupMembership lookup)
+- **STUDENT & GUEST:** Read-only (403 on POST/PUT/PATCH/DELETE)
 
-**Performance:** List actions batch-fetch `created_by` (Public User) via `user_map` (single
-public-schema query). Homework retrieve uses one batch query for Submissions (zero N+1).
+**Teacher Boundary Enforcement:** TEACHER attempting to assign groups they do NOT teach
+returns **400 Bad Request** with message: "Teachers can only assign groups they teach."
+
+================================================================================
+EXAM ASSIGNMENT: OPEN vs CLOSED STATUS
+================================================================================
+
+**CLOSED (default):**
+- Assignment exists in database but is **invisible in exam room** to students
+- Teacher use case: Prepare exam room before opening; test infrastructure
+- Students cannot see or access the assignment
+
+**OPEN:**
+- Assignment is **visible in exam room** to students in assigned groups
+- Teacher use case: Ready for live exam; students can see and attempt
+- Students in assigned groups can view and interact with assignment
+
+**Workflow Example:**
+1. Create ExamAssignment with status=CLOSED
+2. Teacher previews test, verifies content
+3. Update to status=OPEN when ready
+4. Students see assignment in exam room and can attempt
+5. Update to status=CLOSED after exam time (prevents late attempts)
+
+================================================================================
+HOMEWORK ASSIGNMENT: DEADLINE & STUDENT STATUS
+================================================================================
+
+**Deadline Validation:**
+- Must be a future timestamp (current_time < deadline)
+- 400 Bad Request if deadline <= current time ("Deadline must be in the future.")
+- Supported time formats: ISO 8601 with timezone (e.g., "2025-02-07T23:59:59Z")
+
+**Student's Current Status (from Submission records):**
+
+| Status       | Condition                                    |
+|--------------|----------------------------------------------|
+| Not Started  | No Submission record exists for this resource |
+| In Progress  | Submission exists with status STARTED or SUBMITTED |
+| Completed    | Submission exists with status GRADED        |
+
+**Calculation Method:**
+- One batch query per homework retrieve: `Submission.objects.filter(homework=hw, user=current_user)`
+- Returns {"mock_test": {id: status}, "quiz": {id: status}}
+- Zero N+1 queries; all statuses loaded in single query
+- Each MockTest/Quiz in response includes its status for current student
+
+================================================================================
+ASSIGNED_USER_IDS: CROSS-SCHEMA USER VALIDATION
+================================================================================
+
+**Field Format:** ArrayField of integers (User IDs from public schema)
+
+**Validation Process:**
+1. **Type Check:** All values must be integers
+2. **Public Schema Lookup:** Verify each ID exists in User table (public schema)
+   - Query: `User.objects.filter(id__in=user_ids)`
+   - Error: "The following user IDs do not exist: [99, 101]" (if missing)
+3. **Tenant Boundary Check:** Verify each user belongs to current center
+   - Query: `User.objects.filter(id__in=user_ids, center_id=tenant_center_id)`
+   - Error: "The following user IDs do not belong to this center: [15, 22]"
+   - Prevents accidental assignment of users from wrong center
+
+**Use Cases:**
+- STUDENT: Assigned individually for personalized homework
+- GUEST: Assigned individually for guest access (no group membership required)
+- TEACHER: NOT assignable (400 error if attempted)
+
+**Security:** Cross-schema validation ensures strict tenant isolation; users cannot
+assign individuals from other centers to their assignments.
+
+================================================================================
+RESOURCE CONSTRAINTS
+================================================================================
+
+**MockTests:**
+- Must be PUBLISHED status (not DRAFT)
+- Cannot be deleted (deleted_at IS NOT NULL check)
+- Error: "MockTest '{title}' is not PUBLISHED." or "MockTest is deleted."
+
+**Quizzes:**
+- Must be ACTIVE (is_active=True)
+- Cannot be deleted
+- Error: "Quiz '{title}' is not active." or "Quiz is deleted."
+
+**At Least One Resource:**
+- ExamAssignment: Requires 1 MockTest (foreign key, required)
+- HomeworkAssignment: Requires at least 1 MockTest OR 1 Quiz
+- Error: "At least one MockTest or Quiz must be assigned."
+
+**At Least One Assignment Target:**
+- ExamAssignment: Requires at least 1 group in assigned_groups
+- HomeworkAssignment: Requires at least 1 group OR 1 user
+- Error: "At least one group or one user must be assigned."
+
+================================================================================
+PERFORMANCE OPTIMIZATIONS
+================================================================================
+
+**ExamAssignment List:** Batch-fetches created_by (Public User) via user_map
+- Collects all created_by_id values from paginated assignments
+- Single query in public schema: `User.objects.filter(id__in=user_ids)`
+- Passes user_map to serializer context
+- Result: 20 assignments = 1 public schema query (not 20)
+
+**HomeworkAssignment Retrieve:** Batch-fetches submission statuses
+- Single query for all submissions: `Submission.objects.filter(homework=hw, user=user)`
+- Maps submission status per MockTest/Quiz ID
+- Result: 10 resources = 1 submission query (not 10)
+
+**Queryset Optimization:**
+- `select_related('mock_test')` for ExamAssignment
+- `prefetch_related('assigned_groups', 'mock_tests', 'quizzes')` for HomeworkAssignment
 """
+
 from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiParameter,
@@ -47,8 +159,9 @@ from .serializers import (
 
 RESP_400 = OpenApiResponse(
     description=(
-        "Validation error: mock_test not PUBLISHED, quiz not ACTIVE, past deadline, "
-        "invalid resource IDs, or assigned_user_ids not in current center."
+        "Validation error: resource not PUBLISHED/ACTIVE, past deadline, teacher "
+        "assigning non-taught groups, invalid resource IDs, or assigned_user_ids "
+        "not in current center."
     ),
     examples=[
         OpenApiExample(
@@ -57,20 +170,48 @@ RESP_400 = OpenApiResponse(
             response_only=True,
         ),
         OpenApiExample(
-            "Invalid resource",
-            value={"mock_test_ids": "MockTest '...' is not PUBLISHED."},
+            "Resource not published",
+            value={"mock_test_ids": "MockTest 'Draft Exam' is not PUBLISHED."},
             response_only=True,
+            description="Cannot assign DRAFT or DELETED MockTests."
+        ),
+        OpenApiExample(
+            "Teacher assigning non-taught group",
+            value={"assigned_group_ids": "Teachers can only assign groups they teach."},
+            response_only=True,
+            description="TEACHER role enforced: must have TEACHER role in target groups."
         ),
         OpenApiExample(
             "User IDs not in center",
-            value={"assigned_user_ids": "The following user IDs do not belong to this center: [99]."},
+            value={"assigned_user_ids": "The following user IDs do not belong to this center: [99, 101]."},
             response_only=True,
+            description="Cross-schema validation: User.center_id must match current center."
+        ),
+        OpenApiExample(
+            "User IDs don't exist",
+            value={"assigned_user_ids": "The following user IDs do not exist: [999]."},
+            response_only=True,
+            description="Public schema lookup: User must exist in User table."
         ),
     ],
 )
 RESP_401 = OpenApiResponse(description="Authentication required.")
 RESP_403 = OpenApiResponse(
-    description="Permission denied: e.g. teacher managing assignments for groups they do not teach."
+    description="Permission denied: students/guests cannot create/update/delete; teachers managing non-taught groups.",
+    examples=[
+        OpenApiExample(
+            "Student attempting POST/PUT/PATCH",
+            value={"detail": "You do not have permission to perform this action."},
+            response_only=True,
+            description="STUDENT role lacks POST/PUT/PATCH/DELETE permissions."
+        ),
+        OpenApiExample(
+            "Teacher retrieving hidden assignment",
+            value={"detail": "Not found."},
+            response_only=True,
+            description="TEACHER can only retrieve assignments for groups they teach. Returns 404 if not in taught groups."
+        ),
+    ],
 )
 RESP_404 = OpenApiResponse(description="Assignment not found.")
 
@@ -84,8 +225,10 @@ STUDENT only their groups; GUEST none. **Performance:** `created_by` from public
 """
 EXAM_RETRIEVE_DESC = "Retrieve an exam assignment. Same visibility as list."
 EXAM_CREATE_DESC = (
-    "Create exam assignment. CENTER_ADMIN or TEACHER. mock_test must be PUBLISHED. "
-    "**status:** CLOSED = not visible in exam room; OPEN = visible to assigned groups."
+    "Create exam assignment. CENTER_ADMIN or TEACHER. MockTest must be PUBLISHED. "
+    "**Status:** CLOSED = invisible in exam room (preparation); OPEN = visible to assigned groups. "
+    "**Teacher Boundary:** TEACHER can only assign groups where they have TEACHER role (GroupMembership); "
+    "returns 400 if attempting to assign non-taught groups."
 )
 EXAM_UPDATE_DESC = "Update exam assignment. CENTER_ADMIN or teacher for assigned groups."
 EXAM_DESTROY_DESC = "Delete exam assignment. CENTER_ADMIN or teacher for assigned groups."
@@ -196,24 +339,27 @@ STUDENT their groups OR their user ID in assigned_user_ids; GUEST only assigned_
 **Performance:** created_by from public schema (user_map). Results are distinct().
 """
 HOMEWORK_RETRIEVE_DESC = """
-Retrieve homework (detail). For each assigned MockTest/Quiz, the response includes
-**Student's Current Status** (from attempts.Submission):
-- **Not Started:** No submission for that resource.
-- **In Progress:** Submission exists with status STARTED or SUBMITTED.
-- **Completed:** Submission exists with status GRADED.
-One batch query for submissions (zero N+1). Same visibility as list.
+Retrieve homework (detailed). For each assigned MockTest/Quiz, response includes
+**Student's Current Status** (calculated from Submission records, one batch query):
+- **Not Started:** No Submission exists for that resource
+- **In Progress:** Submission.status in (STARTED, SUBMITTED)
+- **Completed:** Submission.status = GRADED
+
+**Performance:** Single batch query for all submissions: `Submission.objects.filter(homework=hw, user=current_user)`.
+Zero N+1 queries; all statuses loaded at once. Same visibility as list (role-based filtering).
 """
 HOMEWORK_CREATE_DESC = """
 Create homework. CENTER_ADMIN or TEACHER. Only **PUBLISHED** MockTests and **ACTIVE**
 Quizzes. **Deadline** must be in the future. **assigned_user_ids:** list of integers
-(User IDs from public schema; must belong to current center).
+(User IDs from public schema; validated: (1) exist in User table, (2) belong to current center).
+**Teacher Boundary:** TEACHER can only assign groups where they teach.
 """
 HOMEWORK_UPDATE_DESC = "Update homework. CENTER_ADMIN or teacher for assigned groups."
 HOMEWORK_DESTROY_DESC = "Delete homework. CENTER_ADMIN or teacher for assigned groups."
 
 # Example response for homework detail (student status)
 HOMEWORK_DETAIL_RESPONSE_EXAMPLE = OpenApiExample(
-    "Homework detail with student status",
+    "Homework detail with student status (mixed states)",
     value={
         "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
         "title": "Week 3 Homework",
@@ -240,11 +386,91 @@ HOMEWORK_DETAIL_RESPONSE_EXAMPLE = OpenApiExample(
         ],
         "assigned_groups": [{"id": "770e8400-e29b-41d4-a716-446655440002", "name": "N5 Morning"}],
         "show_results_immediately": True,
+        "created_by": {
+            "id": 42,
+            "email": "teacher@example.com",
+            "full_name": "John Smith",
+            "role": "TEACHER"
+        },
         "created_at": "2025-01-15T10:00:00Z",
         "updated_at": "2025-01-15T10:00:00Z",
     },
     response_only=True,
-    description="status per resource: Not Started | In Progress | Completed.",
+    description="Status values per resource: 'Not Started' | 'In Progress' | 'Completed' (from Submission.status mapping).",
+)
+
+HOMEWORK_DETAIL_NOT_STARTED_EXAMPLE = OpenApiExample(
+    "Homework detail - student not started any resources",
+    value={
+        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "title": "Week 3 Homework",
+        "description": "Complete N5 mock and quiz by Friday.",
+        "deadline": "2025-02-07T23:59:59Z",
+        "mock_tests": [
+            {
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "title": "JLPT N5 Mock",
+                "level": "N5",
+                "status": "Not Started",
+                "type": "mock_test",
+            },
+        ],
+        "quizzes": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "title": "Vocabulary Quiz",
+                "description": "Basic vocab",
+                "status": "Not Started",
+                "type": "quiz",
+            },
+        ],
+        "assigned_groups": [{"id": "770e8400-e29b-41d4-a716-446655440002", "name": "N5 Morning"}],
+        "show_results_immediately": True,
+        "created_at": "2025-01-15T10:00:00Z",
+        "updated_at": "2025-01-15T10:00:00Z",
+    },
+    response_only=True,
+    description="No Submission records exist for this user; all resources show 'Not Started'.",
+)
+
+HOMEWORK_DETAIL_COMPLETED_EXAMPLE = OpenApiExample(
+    "Homework detail - student completed all resources",
+    value={
+        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "title": "Week 3 Homework",
+        "description": "Complete N5 mock and quiz by Friday.",
+        "deadline": "2025-02-07T23:59:59Z",
+        "mock_tests": [
+            {
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "title": "JLPT N5 Mock",
+                "level": "N5",
+                "status": "Completed",
+                "type": "mock_test",
+            },
+        ],
+        "quizzes": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "title": "Vocabulary Quiz",
+                "description": "Basic vocab",
+                "status": "Completed",
+                "type": "quiz",
+            },
+        ],
+        "assigned_groups": [{"id": "770e8400-e29b-41d4-a716-446655440002", "name": "N5 Morning"}],
+        "show_results_immediately": True,
+        "created_by": {
+            "id": 42,
+            "email": "teacher@example.com",
+            "full_name": "John Smith",
+            "role": "TEACHER"
+        },
+        "created_at": "2025-01-15T10:00:00Z",
+        "updated_at": "2025-01-15T10:00:00Z",
+    },
+    response_only=True,
+    description="All Submission records have status=GRADED; all resources show 'Completed'.",
 )
 
 homework_assignment_viewset_schema = extend_schema_view(
@@ -268,7 +494,11 @@ homework_assignment_viewset_schema = extend_schema_view(
             403: RESP_403,
             404: RESP_404,
         },
-        examples=[HOMEWORK_DETAIL_RESPONSE_EXAMPLE],
+        examples=[
+            HOMEWORK_DETAIL_NOT_STARTED_EXAMPLE,
+            HOMEWORK_DETAIL_RESPONSE_EXAMPLE,
+            HOMEWORK_DETAIL_COMPLETED_EXAMPLE,
+        ],
     ),
     create=extend_schema(
         tags=["Homework Assignments"],

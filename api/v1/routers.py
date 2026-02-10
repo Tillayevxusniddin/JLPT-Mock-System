@@ -1,6 +1,7 @@
 #api/v1/routers.py
 from rest_framework.routers import DefaultRouter
 
+from apps.authentication.views import UserViewSet
 from apps.centers.views import (
     OwnerCenterViewSet,
     OwnerCenterAdminViewSet,
@@ -24,6 +25,13 @@ from apps.notifications.views import NotificationViewSet
 
 
 api_router = DefaultRouter()
+
+# Users (CENTER_ADMIN and TEACHER management)
+api_router.register(
+    r"users",
+    UserViewSet,
+    basename="users",
+)
 
 # Centers / Owner / Admin management
 api_router.register(

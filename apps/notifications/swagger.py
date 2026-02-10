@@ -5,24 +5,43 @@ Real-time engagement via WebSockets and REST for notification list/mark-read.
 Automated reminders (DEADLINE_APPROACHING) are sent by Celery with multi-tenant
 iteration and batch debounce (one per (user, homework) pair).
 
-**WebSocket (master-level):**
+================================================================================
+WEBSOCKET (REAL-TIME)
+================================================================================
+
 - **URL:** `ws/notifications/` (relative to API host; e.g. `wss://api.example.com/ws/notifications/`).
 - **Authentication:** JWT only. Pass via query param `?token=<access_token>` or
-  header `Authorization: Bearer <access_token>`. User identity is taken **only** from
-  the server (JWTAuthMiddleware → scope["user"]). No user IDs in the URL.
-- **Isolation:** Group name is server-controlled: `notify_{user_id}`. A user is added
-  only to their own channel; they cannot subscribe to another user's or tenant's channel.
+    header `Authorization: Bearer <access_token>`.
+- **Handshake:** User identity is resolved server-side (JWTAuthMiddleware → scope["user"]).
+    No user IDs appear in the URL or path.
+- **Rejection codes:** 4401 if missing/invalid token; 1011 if server error.
+- **Isolation:** Group name is server-controlled: `notify_{user_id}`. A user can join
+    only their own group; cross-user or cross-tenant subscription is impossible.
 - **Message structure:** Server sends JSON objects (one per notification). See examples below.
 
-**REST:** list (filter by is_read), retrieve, partial_update (mark as read), mark-all-read (POST).
-**Signals:** All notification triggers use transaction.on_commit() so the real-time push
-happens only after the DB transaction commits.
+================================================================================
+DELIVERY GUARANTEES & DEBOUNCE
+================================================================================
 
-**New notification types (2026):**
-- Student: EXAM_UPDATED, EXAM_CLOSING_SOON, HOMEWORK_UPDATED, HOMEWORK_DEADLINE_CHANGED
+- **transaction.on_commit():** real-time push occurs only after DB commit.
+- **Debounce:** One notification per (user_id, notification_type, related_id).
+- **Owner notifications:** Platform-wide; pushed via WebSocket without tenant DB row.
+
+================================================================================
+NOTIFICATION TYPES (PARTIAL LIST)
+================================================================================
+
+- Student: TASK_ASSIGNED, EXAM_OPENED, EXAM_UPDATED, EXAM_CLOSING_SOON,
+    HOMEWORK_UPDATED, HOMEWORK_DEADLINE_CHANGED, DEADLINE_APPROACHING, SUBMISSION_GRADED
 - Teacher: NEW_SUBMISSION, REVIEW_OVERDUE, STUDENT_JOINED_GROUP
 - Center Admin: MOCK_TEST_PUBLISHED
-- Owner: CONTACT_REQUEST_HIGH_PRIORITY, MIGRATION_FAILED
+- Owner: CONTACT_REQUEST_HIGH_PRIORITY (platform-wide)
+
+================================================================================
+REST ENDPOINTS
+================================================================================
+
+- list (filter by is_read), retrieve, partial_update (mark as read), mark-all-read (POST).
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -124,6 +143,96 @@ WS_EXAM_CLOSING_SOON_EXAMPLE = {
     "updated_at": "2025-01-29T16:00:00Z",
 }
 
+WS_DEADLINE_APPROACHING_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440008",
+    "user_id": 1,
+    "notification_type": "DEADLINE_APPROACHING",
+    "message": "Homework 'Week 4' is due by 2025-02-05 23:59.",
+    "is_read": False,
+    "link": "/homeworks/660e8400-e29b-41d4-a716-446655440001/",
+    "related_task_id": "660e8400-e29b-41d4-a716-446655440001",
+    "related_submission_id": None,
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-02-04T12:00:00Z",
+    "updated_at": "2025-02-04T12:00:00Z",
+}
+
+WS_NEW_SUBMISSION_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440009",
+    "user_id": 42,
+    "notification_type": "NEW_SUBMISSION",
+    "message": "A student has submitted an assignment for review.",
+    "is_read": False,
+    "link": None,
+    "related_task_id": None,
+    "related_submission_id": "aa0e8400-e29b-41d4-a716-446655440005",
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-02-04T13:00:00Z",
+    "updated_at": "2025-02-04T13:00:00Z",
+}
+
+WS_REVIEW_OVERDUE_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440010",
+    "user_id": 42,
+    "notification_type": "REVIEW_OVERDUE",
+    "message": "A submission has been awaiting review for over 48 hours.",
+    "is_read": False,
+    "link": None,
+    "related_task_id": None,
+    "related_submission_id": "aa0e8400-e29b-41d4-a716-446655440006",
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-02-06T09:00:00Z",
+    "updated_at": "2025-02-06T09:00:00Z",
+}
+
+WS_STUDENT_JOINED_GROUP_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440011",
+    "user_id": 42,
+    "notification_type": "STUDENT_JOINED_GROUP",
+    "message": "A new student has joined your group 'N5 Morning'.",
+    "is_read": False,
+    "link": "/groups/770e8400-e29b-41d4-a716-446655440002/",
+    "related_task_id": None,
+    "related_submission_id": None,
+    "related_group_id": "770e8400-e29b-41d4-a716-446655440002",
+    "related_contact_request_id": None,
+    "created_at": "2025-02-06T11:00:00Z",
+    "updated_at": "2025-02-06T11:00:00Z",
+}
+
+WS_MOCK_TEST_PUBLISHED_EXAMPLE = {
+    "id": "990e8400-e29b-41d4-a716-446655440012",
+    "user_id": 7,
+    "notification_type": "MOCK_TEST_PUBLISHED",
+    "message": "A teacher published mock test 'JLPT N3 Practice'.",
+    "is_read": False,
+    "link": "/mock-tests/880e8400-e29b-41d4-a716-446655440003/",
+    "related_task_id": "880e8400-e29b-41d4-a716-446655440003",
+    "related_submission_id": None,
+    "related_group_id": None,
+    "related_contact_request_id": None,
+    "created_at": "2025-02-06T12:00:00Z",
+    "updated_at": "2025-02-06T12:00:00Z",
+}
+
+WS_CONTACT_REQUEST_HIGH_PRIORITY_EXAMPLE = {
+    "id": None,
+    "user_id": 1,
+    "notification_type": "CONTACT_REQUEST_HIGH_PRIORITY",
+    "message": "High priority contact request from Jane Doe.",
+    "is_read": False,
+    "link": None,
+    "related_task_id": None,
+    "related_submission_id": None,
+    "related_group_id": None,
+    "related_contact_request_id": "cc0e8400-e29b-41d4-a716-446655440013",
+    "created_at": None,
+    "updated_at": None,
+}
+
 # Export for schema description / WebSocket docs
 WEBSOCKET_DESCRIPTION = """
 **WebSocket URL:** `ws/notifications/` (e.g. `wss://your-api/ws/notifications/`).
@@ -136,7 +245,7 @@ User is resolved from the token (scope["user"]); no user IDs in the URL.
 **Server → client JSON (one object per notification):**
 - `id`, `user_id`, `notification_type`, `message`, `is_read`, `link`, `related_task_id`, `related_submission_id`, `related_group_id`, `related_contact_request_id`, `created_at`, `updated_at`.
 
-**Example (TASK_ASSIGNED):** link to homework. **Example (EXAM_OPENED):** link to exam room. **Example (SUBMISSION_GRADED):** link to results.
+**Examples:** TASK_ASSIGNED, EXAM_OPENED, DEADLINE_APPROACHING, SUBMISSION_GRADED, NEW_SUBMISSION, REVIEW_OVERDUE.
 """
 
 notification_viewset_schema = extend_schema_view(
@@ -168,8 +277,38 @@ notification_viewset_schema = extend_schema_view(
                 response_only=True,
             ),
             OpenApiExample(
+                "DEADLINE_APPROACHING (24h window)",
+                value=[WS_DEADLINE_APPROACHING_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
                 "SUBMISSION_GRADED (link to results)",
                 value=[WS_SUBMISSION_GRADED_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "NEW_SUBMISSION (teacher alert)",
+                value=[WS_NEW_SUBMISSION_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "REVIEW_OVERDUE (48h pending)",
+                value=[WS_REVIEW_OVERDUE_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "STUDENT_JOINED_GROUP",
+                value=[WS_STUDENT_JOINED_GROUP_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "MOCK_TEST_PUBLISHED",
+                value=[WS_MOCK_TEST_PUBLISHED_EXAMPLE],
+                response_only=True,
+            ),
+            OpenApiExample(
+                "CONTACT_REQUEST_HIGH_PRIORITY (owner)",
+                value=[WS_CONTACT_REQUEST_HIGH_PRIORITY_EXAMPLE],
                 response_only=True,
             ),
             OpenApiExample(

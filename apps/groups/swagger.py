@@ -10,10 +10,37 @@ Tags:
 - **Groups:** CRUD for class groups; list members; role-based visibility.
 - **Group Memberships:** Add/remove members; bulk add; filter by group/user/role.
 
-Role-based visibility:
-- **CENTER_ADMIN:** Full access to all groups and memberships in the center.
-- **TEACHER:** Only groups where they are assigned as teacher; can update those groups; cannot create/destroy groups.
-- **STUDENT:** Only groups they belong to (read-only for list/retrieve).
+=============================================================================
+ROLE-BASED ACCESS CONTROL & VISIBILITY MATRIX
+=============================================================================
+
+GROUP VISIBILITY (List & Retrieve):
+- **CENTER_ADMIN:** Sees ALL groups in the center (no filtering).
+- **TEACHER:** Sees ONLY groups where they have role_in_group=TEACHER.
+  - Teachers are filtered by querying GroupMembership(user_id, role_in_group=TEACHER).
+  - If a teacher is removed from all groups, they see zero groups.
+  - Cannot see groups where they are students.
+- **STUDENT:** Sees ONLY groups where they have role_in_group=STUDENT.
+  - Students are filtered similarly: GroupMembership(user_id, role_in_group=STUDENT).
+  - If a student belongs to multiple groups, they see all of them.
+  - Cannot see groups where they are not assigned.
+
+CROSS-ROLE SCENARIOS:
+- A user can be BOTH TEACHER and STUDENT in the SAME group.
+- Teachers see a group via TEACHER role; students don't see it.
+- Students see a group via STUDENT role; teachers don't see it.
+- Each role has separate visibility scope.
+
+GROUP MODIFICATION PERMISSIONS:
+| Action | CENTER_ADMIN | TEACHER | STUDENT |
+|--------|--------------|---------|---------|
+| CREATE | ✓ 201 | ✗ 403 | ✗ 403 |
+| LIST | ✓ all | ✓ owns (teacher) | ✓ owns (student) |
+| RETRIEVE | ✓ any | ✓ if teaches | ✓ if belongs |
+| UPDATE | ✓ any | ✓ if teaches | ✗ 403 |
+| DELETE | ✓ any | ✗ 403 (even if teaches) | ✗ 403 |
+
+Note: Teachers can UPDATE groups they teach, but cannot DELETE any group.
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -29,6 +56,24 @@ from apps.groups.serializers import (
     GroupMembershipSerializer,
     GroupSerializer,
 )
+
+# =============================================================================
+# DATA CONSTRAINTS & UNIQUE CONSTRAINTS
+# =============================================================================
+
+UNIQUE_CONSTRAINTS = """
+**Group Name Uniqueness:**
+Groups have a UNIQUE constraint on the `name` field within each center.
+Attempting to create or update a group with a duplicate name returns **400 Bad Request**:
+{"name": ["A group with this name already exists."]}
+
+**GroupMembership Uniqueness:**
+GroupMembership has a UNIQUE constraint on (user_id, group_id, role_in_group).
+Attempting to add a user with a duplicate role to a group returns **400 Bad Request**:
+{"detail": "This user is already a member of this group with this role."}
+
+Note: A user CAN be BOTH STUDENT and TEACHER in the same group (different roles, not duplicate).
+"""
 
 # -----------------------------------------------------------------------------
 # Reusable responses
@@ -51,16 +96,35 @@ RESP_404 = OpenApiResponse(description="Not Found: group or membership not found
 GROUPS_LIST_DESCRIPTION = """
 List class groups. **Role-based visibility:**
 - **CENTER_ADMIN:** Sees **all** groups in the center.
-- **TEACHER:** Sees **only** groups where they are assigned as teacher (`role_in_group=TEACHER`).
-- **STUDENT:** Sees **only** groups they belong to (`role_in_group=STUDENT`).
+- **TEACHER:** Sees **only** groups where they have role_in_group=TEACHER.
+  - Filtered by: `GroupMembership.objects.filter(user_id=request.user.id, role_in_group=TEACHER)`.
+  - If a teacher is removed from all groups, the list is empty.
+  - Teachers cannot see groups where they are students.
+- **STUDENT:** Sees **only** groups where they have role_in_group=STUDENT.
+  - Filtered by: `GroupMembership.objects.filter(user_id=request.user.id, role_in_group=STUDENT)`.
+  - Students cannot see groups where they are not assigned.
 
-**Cross-schema performance:** Teacher details (names, avatars) are fetched from the
-**public schema** in a **single batch** for all groups on the page. This avoids
-N+1 schema switching: e.g. 20 groups = 1 public-schema query instead of 20.
-Each list item includes a `teachers` array built from this pre-fetched data.
+**Cross-schema batch optimization (critical):**
+Teacher details (names, avatars, first_name, last_name) are fetched from the **public schema**
+in a **single batch** for all groups on the page. This avoids N+1 schema switching.
+
+Example:
+- WITHOUT optimization: 20 groups = 20 schema switches (20 public-schema queries).
+- WITH optimization: 20 groups = 1 schema switch (1 public-schema query).
+
+The `context['teacher_map']` is pre-populated in list view:
+```
+teacher_map = {
+  'group_id_1': [{'id': 10, 'first_name': 'Taro', ...}, {'id': 11, 'first_name': 'Hanako', ...}],
+  'group_id_2': [{'id': 5, 'first_name': 'Yuki', ...}],
+  ...
+}
+```
+Each list item includes a `teachers` array populated from this map.
 
 **Search:** `name`, `description`.  
 **Ordering:** `created_at`, `name` (default: -created_at).
+**Pagination:** Standard DRF pagination (default 20 per page).
 """
 
 GROUPS_RETRIEVE_DESCRIPTION = """
@@ -71,19 +135,57 @@ TEACHER only groups they teach; STUDENT only groups they are in.
 GROUPS_CREATE_DESCRIPTION = """
 Create a new group. **CENTER_ADMIN only.** Teachers and students receive **403 Forbidden**.
 
-**Optional:** Pass `teacher_ids` (list of user ids) to assign teachers to the group
-immediately. All ids must belong to the same center and have role TEACHER.
+**Constraints:**
+- Group name is **unique per center** (UniqueConstraint on name field).
+- `max_students` defaults to 30; must be > 0 if provided.
+- `is_active` defaults to True.
+
+**Optional:** Pass `teacher_ids` (list of user IDs) to assign teachers immediately.
+- All IDs must belong to the same center as the requester.
+- All users must have role TEACHER (not STUDENT or GUEST).
+- Teachers are created via bulk insert; `teacher_count` is auto-updated.
+
+**403 Scenarios:**
+- TEACHER user attempting to create → 403 Forbidden
+- STUDENT user attempting to create → 403 Forbidden
+
+**400 Error Examples:**
+- Duplicate group name: "A group with this name already exists."
+- Teacher user not found: "Some users were not found."
+- Teacher from another center: "User {id} belongs to another center."
+- User is not TEACHER: "User {id} is not a TEACHER."
 """
 
 GROUPS_UPDATE_DESCRIPTION = """
-Update a group. **CENTER_ADMIN** can update any group; **TEACHER** can update only
-groups where they are assigned as teacher. Students receive **403**.
+Update a group. **CENTER_ADMIN** can update any group. **TEACHER** can update only
+groups where they have role_in_group=TEACHER. Students receive **403**.
+
+**403 Scenarios (specific):**
+- TEACHER user updating a group they don't teach → 403 Forbidden
+- TEACHER user updating a group where they are student only → 403 Forbidden
+- STUDENT user attempting any update → 403 Forbidden
+
+**400 Error Examples:**
+- Duplicate group name: "A group with this name already exists."
+- Database integrity error: "Database integrity error." (rare)
+
+**Note:** Teachers CAN update the groups they teach (name, description, max_students, is_active).
+Teachers CANNOT delete any group (only CENTER_ADMIN can delete).
 """
 
 GROUPS_PARTIAL_UPDATE_DESCRIPTION = "Partial update. Same permissions as full update."
 
 GROUPS_DESTROY_DESCRIPTION = """
 Delete a group. **CENTER_ADMIN only.** Teachers and students receive **403 Forbidden**.
+
+**403 Scenarios:**
+- TEACHER user attempting delete (even if they teach the group) → 403 Forbidden
+- STUDENT user attempting delete → 403 Forbidden
+
+**Behavior:** When deleted, all GroupMembership records and GroupMembershipHistory 
+are cascaded deleted (GROUP_DELETION via CASCADE).
+
+**Response:** 200 OK with message (not 204 No Content). See response examples.
 """
 
 GROUPS_MEMBERS_DESCRIPTION = """
@@ -126,14 +228,16 @@ group_viewset_schema = extend_schema_view(
         responses={
             201: GroupSerializer,
             400: OpenApiResponse(
-                description="Validation error (e.g. duplicate group name, invalid teacher_ids).",
+                description="Validation error (e.g. duplicate group name, invalid teacher_ids, user not TEACHER).",
                 examples=[
                     OpenApiExample("Duplicate name", value={"name": ["A group with this name already exists."]}, response_only=True),
                     OpenApiExample("User not in center", value={"teacher_ids": ["User 5 belongs to another center."]}, response_only=True),
+                    OpenApiExample("User not TEACHER", value={"teacher_ids": ["User 3 is not a TEACHER."]}, response_only=True),
+                    OpenApiExample("User not found", value={"teacher_ids": ["Some users were not found."]}, response_only=True),
                 ],
             ),
             401: RESP_401,
-            403: OpenApiResponse(description="Only CENTER_ADMIN can create groups."),
+            403: OpenApiResponse(description="Only CENTER_ADMIN can create groups. TEACHER/STUDENT receive 403."),
         },
         examples=[
             OpenApiExample(
@@ -189,9 +293,14 @@ group_viewset_schema = extend_schema_view(
         summary="Delete group",
         description=GROUPS_DESTROY_DESCRIPTION,
         responses={
-            204: OpenApiResponse(description="Group deleted."),
+            200: OpenApiResponse(
+                description="Group deleted successfully.",
+                examples=[
+                    OpenApiExample("Success", value={"message": "Group deleted successfully."}, response_only=True),
+                ],
+            ),
             401: RESP_401,
-            403: RESP_403,
+            403: OpenApiResponse(description="Only CENTER_ADMIN can delete groups. TEACHER/STUDENT receive 403."),
             404: RESP_404,
         },
     ),
@@ -217,9 +326,17 @@ group_viewset_schema = extend_schema_view(
 
 MEMBERSHIP_LIST_DESCRIPTION = """
 List group memberships. **Role-based visibility:**
-- **CENTER_ADMIN:** All memberships in the center.
-- **TEACHER:** Only memberships in groups they teach.
-- **STUDENT:** Only their own memberships (groups they belong to).
+- **CENTER_ADMIN:** All memberships in the center (no filtering).
+- **TEACHER:** Only memberships in groups they teach (role_in_group=TEACHER).
+  - Teachers see both student and teacher memberships in their groups.
+  - Teachers cannot see memberships in groups where they don't teach.
+- **STUDENT:** Only their own memberships (groups they are in).
+  - Students can only see themselves, not other students in their groups (privacy).
+
+**Member Role Meanings:**
+- `role_in_group=STUDENT`: User is a student in the group.
+- `role_in_group=TEACHER`: User is a teacher in the group.
+- A user can have BOTH roles in the SAME group (e.g., teaching one group, studying in another).
 
 **Filters (DjangoFilterBackend + query params):**
 - `group_id` (UUID): Filter by group.
@@ -232,11 +349,26 @@ List group memberships. **Role-based visibility:**
 MEMBERSHIP_CREATE_DESCRIPTION = """
 Add one member to a group. **CENTER_ADMIN only.** Teachers and students receive **403 Forbidden**.
 
-**Constraints:**
-- User must belong to the same center (cross-tenant check).
-- For `role_in_group=STUDENT`: user must be STUDENT or GUEST; group must not be full (`student_count < max_students`).
-- For `role_in_group=TEACHER`: user must have role TEACHER.
-- Duplicate (same user + group + role) returns **400**.
+**Constraints (validated in order):**
+1. User must exist (cross-schema check in public schema).
+2. User must belong to the same center as requester.
+3. For `role_in_group=STUDENT`:
+   - User must have role STUDENT or GUEST (not TEACHER).
+   - Group must not be full: `group.student_count < group.max_students`.
+4. For `role_in_group=TEACHER`:
+   - User must have role TEACHER (not STUDENT).
+5. Duplicate membership: Same (user_id, group_id, role_in_group) returns **400**.
+
+**400 Error Examples:**
+- Group full: "Group is full (max 30 students)."
+- Duplicate membership: "This user is already a member of this group with this role."
+- User not in center: "User belongs to a different center."
+- User is not TEACHER: "User role must be TEACHER to be added as a teacher."
+- User cannot be STUDENT: "User role must be STUDENT or GUEST."
+
+**403 Scenarios:**
+- TEACHER attempting to add member → 403 Forbidden
+- STUDENT attempting to add member → 403 Forbidden
 """
 
 MEMBERSHIP_CREATE_400_EXAMPLES = [
@@ -254,15 +386,40 @@ created in **GroupMembershipHistory** (reason: REMOVED). This preserves a consis
 """
 
 BULK_ADD_DESCRIPTION = """
-**CENTER_ADMIN only.** Add multiple members to a group in one request.
+**CENTER_ADMIN only.** Add multiple members to a group in one atomic request.
 
-**Behavior:** Fully atomic. Duplicate (user_id, role_in_group) within the request
-are deduplicated; existing members in the group are skipped. Enforces `max_students`:
-if adding the requested students would exceed the group limit, returns **400** with
-"Group allows at most X students...".
+**Request Format:**
+- `group_id` (UUID): Target group.
+- `members` (array of objects): List of 1-100 members to add.
+  - Each member object: `{"user_id": int, "role_in_group": "STUDENT" | "TEACHER"}`
+  - Both fields required.
 
-**Request body:** `group_id` (UUID) and `members` (list of `{ "user_id": int, "role_in_group": "STUDENT" | "TEACHER" }`).
-**Response:** `group_id`, `created_count`, `skipped_count`, `created_user_ids`.
+**Behavior (atomic, with deduplication):**
+1. Duplicate members within the request are deduplicated automatically.
+2. Existing members in the group are skipped (no error, included in `skipped_count`).
+3. Role validation applied to each user (STUDENT check, TEACHER check, same as single add).
+4. Max students check applied: if adding would exceed `group.max_students`, returns **400**.
+5. All valid members are created in one bulk insert.
+6. `student_count` and `teacher_count` are updated atomically.
+
+**Response Fields:**
+- `group_id` (UUID): The target group.
+- `created_count` (int): Number of new memberships successfully created.
+- `skipped_count` (int): Number of members skipped (already existed or duplicated in request).
+- `created_user_ids` (array of int): User IDs of newly created members.
+
+**Example: Request has users 1, 2, 2 (duplicate). User 3 already in group.**
+- Result: `created_count: 2, skipped_count: 2, created_user_ids: [1, 2]`
+
+**400 Error Examples:**
+- Group full: "Group allows at most 30 students. Adding 5 would make 32."
+- User not in center: "User 99 belongs to different center."
+- Invalid role: "Item 0: role_in_group must be STUDENT or TEACHER."
+- User not found: "Some users not found."
+
+**403 Scenarios:**
+- TEACHER attempting bulk add → 403 Forbidden
+- STUDENT attempting bulk add → 403 Forbidden
 """
 
 BULK_ADD_400_EXAMPLES = [
@@ -339,10 +496,20 @@ group_membership_viewset_schema = extend_schema_view(
         request=BulkGroupMembershipSerializer,
         responses={
             201: OpenApiResponse(
-                description="Created count, skipped count, and created_user_ids.",
+                description="Bulk add completed. Returns count of created, skipped, and user IDs.",
                 examples=[
                     OpenApiExample(
-                        "Success",
+                        "All new members (no skips)",
+                        value={
+                            "group_id": "550e8400-e29b-41d4-a716-446655440000",
+                            "created_count": 3,
+                            "skipped_count": 0,
+                            "created_user_ids": [10, 11, 12],
+                        },
+                        response_only=True,
+                    ),
+                    OpenApiExample(
+                        "Mixed (some already existed)",
                         value={
                             "group_id": "550e8400-e29b-41d4-a716-446655440000",
                             "created_count": 2,
@@ -351,14 +518,30 @@ group_membership_viewset_schema = extend_schema_view(
                         },
                         response_only=True,
                     ),
+                    OpenApiExample(
+                        "All skipped (duplicates in request + existing)",
+                        value={
+                            "group_id": "550e8400-e29b-41d4-a716-446655440000",
+                            "created_count": 0,
+                            "skipped_count": 2,
+                            "created_user_ids": [],
+                        },
+                        response_only=True,
+                    ),
                 ],
             ),
             400: OpenApiResponse(
-                description="Group full, user not in center, or validation error.",
-                examples=BULK_ADD_400_EXAMPLES,
+                description="Group full, user not in center, validation error, or invalid request format.",
+                examples=[
+                    OpenApiExample("Group full", value={"group": "Group allows at most 30 students. Adding 5 would make 32."}, response_only=True),
+                    OpenApiExample("User not in center", value={"non_field_errors": ["User 99 belongs to different center."]}, response_only=True),
+                    OpenApiExample("Invalid role format", value={"members": "Item 0: role_in_group must be STUDENT or TEACHER."}, response_only=True),
+                    OpenApiExample("User not found", value={"non_field_errors": ["Some users not found."]}, response_only=True),
+                    OpenApiExample("Missing user_id", value={"members": "Item 1 must have 'user_id'."}, response_only=True),
+                ],
             ),
             401: RESP_401,
-            403: OpenApiResponse(description="Only CENTER_ADMIN can bulk add."),
+            403: OpenApiResponse(description="Only CENTER_ADMIN can bulk add. TEACHER/STUDENT receive 403."),
         },
         examples=[
             OpenApiExample(
@@ -380,6 +563,18 @@ group_membership_viewset_schema = extend_schema_view(
                     "members": [
                         {"user_id": 10, "role_in_group": "STUDENT"},
                         {"user_id": 11, "role_in_group": "STUDENT"},
+                    ],
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Bulk add with deduplication",
+                value={
+                    "group_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "members": [
+                        {"user_id": 5, "role_in_group": "STUDENT"},
+                        {"user_id": 5, "role_in_group": "STUDENT"},  # Duplicate in request
+                        {"user_id": 6, "role_in_group": "STUDENT"},
                     ],
                 },
                 request_only=True,

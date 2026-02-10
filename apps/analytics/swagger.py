@@ -4,13 +4,22 @@ OpenAPI / Swagger documentation for the analytics app (drf-spectacular).
 Role-based dashboards with distinct tags and rich JSON examples for frontend charts/tables.
 Performance: Count/Avg, user_map (no N+1), select_related/prefetch where appropriate.
 
+**Caching (Redis/Django cache):**
+- OWNER / CENTER_ADMIN / TEACHER / STUDENT dashboards use role-based cache keys.
+- TTLs: 60 seconds each (OWNER_TTL, CENTER_ADMIN_TTL, TEACHER_TTL, STUDENT_TTL).
+
 **Multi-tenant aggregation:**
 - **Owner:** PUBLIC schema only (Center, User, ContactRequest). No tenant tables.
 - **Center Admin:** User counts via with_public_schema; Group/ExamAssignment in tenant.
 - **Teacher:** Distinct students across teacher's groups; pending = SUBMITTED; user_map for names.
 - **Student:** Upcoming = assigned_groups OR assigned_user_ids, exclude homeworks with GRADED submission; skill_performance from Submission.results.
 
-**Permissions:** 401 Unauthorized if not authenticated. 403 Forbidden if role does not match (e.g. student calling Owner dashboard).
+**Permissions / RBAC:**
+- OWNER dashboard: only Owner role
+- Center Admin dashboard: only Center Admin
+- Teacher dashboard: only Teacher
+- Student dashboard: only Student
+- 401 if unauthenticated; 403 if role mismatch (e.g., student calling Owner dashboard)
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -39,6 +48,7 @@ OWNER_DESCRIPTION = """
 - **active_centers_count:** Centers with status ACTIVE and non-empty schema.
 - **recent_contact_requests:** Last 10 platform-wide contact requests.
 - **growth_centers_pct:** Optional (null); reserved for time-series.
+**Caching:** 60s TTL (OWNER_TTL).
 """
 OWNER_RESPONSE_EXAMPLE = {
     "total_centers": 12,
@@ -83,6 +93,7 @@ Group and ExamAssignment counts from **current TENANT** schema.
 - **total_groups:** Tenant Group count.
 - **active_exams_count:** Tenant ExamAssignment with status OPEN.
 - **growth_students_pct:** Optional (null); reserved for time-series.
+**Caching:** 60s TTL (CENTER_ADMIN_TTL).
 """
 CENTER_ADMIN_RESPONSE_EXAMPLE = {
     "total_students": 120,
@@ -118,6 +129,7 @@ TEACHER_DESCRIPTION = """
 - **pending_grading_count:** Submissions with status **SUBMITTED** (awaiting grading).
 - **recent_submissions:** Last 10 submissions with student names (from public schema via **user_map**, no N+1).
 - **submission_trend_count:** Optional (null); reserved for trend metrics.
+**Caching:** 60s TTL (TEACHER_TTL).
 """
 TEACHER_RESPONSE_EXAMPLE = {
     "my_groups_count": 4,
@@ -170,6 +182,7 @@ STUDENT_DESCRIPTION = """
 - **skill_performance:** Derived from **Submission.results** (JLPT section_results: Vocabulary, Reading, Listening; or Language & Reading + Listening for N4/N5; or Quiz percentage). Exact structure for charts: `[{"skill_name": "Listening", "average_score": 45.5}, ...]`.
 - **skill_performance (standardized):** Always includes ordered entries for Vocabulary, Reading, Listening, Language & Reading, and Quiz (missing values = 0.0), plus any extra sections.
 - **submission_trend_count:** Optional (null); reserved for trend metrics.
+**Caching:** 60s TTL (STUDENT_TTL).
 """
 STUDENT_RESPONSE_EXAMPLE = {
     "average_score": 78.5,
@@ -196,6 +209,8 @@ STUDENT_RESPONSE_EXAMPLE = {
         {"skill_name": "Vocabulary", "average_score": 28.0},
         {"skill_name": "Reading", "average_score": 32.5},
         {"skill_name": "Listening", "average_score": 18.0},
+        {"skill_name": "Language & Reading", "average_score": 40.0},
+        {"skill_name": "Quiz", "average_score": 85.0},
     ],
 }
 

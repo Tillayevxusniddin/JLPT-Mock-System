@@ -14,11 +14,67 @@ Multi-tenant context:
   background migrations complete. Creating a center triggers schema creation and
   a Celery task to run tenant migrations; when done, `is_ready` is set to true.
 - Center **destroy** returns **202 Accepted** and queues a background task; it is
-  **not instantaneous**. The task permanently deletes users, S3 files, tenant schema,
-  invitations, contact requests, and the center record (irreversible).
+  **not instantaneous**. The task permanently deletes users (and their S3 avatars),
+  tenant schema (DROP SCHEMA CASCADE), invitations, contact requests, subscriptions,
+  and the center record (irreversible). The task may take minutes; do not assume 
+  immediate deletion.
 - **Slug / subdomain:** The center's `slug` (auto-generated from name or set on
   create) determines the tenant's subdomain. Example: slug `edu1` → `edu1.mikan.uz`.
   Users access the center's app at `https://{slug}.mikan.uz`. Slug must be unique.
+
+=============================================================================
+ROLE-BASED ACCESS CONTROL (RBAC) MATRIX
+=============================================================================
+
+| Endpoint | OWNER | CENTER_ADMIN | TEACHER | STUDENT | GUEST | PUBLIC |
+|----------|-------|--------------|---------|---------|-------|--------|
+| **Centers (Owner)** |  |  |  |  |  |  |
+| POST /owner-centers | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /owner-centers | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /owner-centers/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| PATCH /owner-centers/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| DELETE /owner-centers/{id} | ✓ (202) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| **Admin Management** |  |  |  |  |  |  |
+| GET /owner-center-admins | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /owner-center-admins/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| POST /owner-center-admins | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| PATCH /owner-center-admins/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| DELETE /owner-center-admins/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| **Center Admin's Own Center & Admins** |  |  |  |  |  |  |
+| GET /center-admin-centers/{id} | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| PATCH /center-admin-centers/{id} | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /center-admin-centers/{id}/admins | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| POST /center-admin-centers/{id}/admins/add | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| DELETE /center-admin-centers/{id}/admins/{uid} | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| **Invitations & Guests** |  |  |  |  |  |  |
+| POST /invitations | ✗ 403 | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /invitations | ✗ 403 | ✓ (own center) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| POST /invitations/{id}/approve | ✗ 403 | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /guests | ✗ 403 | ✓ (own center) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| POST /guests/upgrade | ✗ 403 | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| **Subscriptions** |  |  |  |  |  |  |
+| GET /owner-subscriptions | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /owner-subscriptions/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| PATCH /owner-subscriptions/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| GET /center-admin-centers/{id}/subscription | ✗ 403 | ✓ (own) | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| **Contact Requests** |  |  |  |  |  |  |
+| POST /contact-requests | ✓ | ✓ | ✓ | ✓ | ✓ | **✓** |
+| GET /owner-contact-requests | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+| PATCH /owner-contact-requests/{id} | ✓ | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 403 | ✗ 401 |
+
+**Key Notes:**
+- ✓ = Allowed
+- ✗ 403 = Forbidden (user authenticated but lacks permission)
+- ✗ 401 = Unauthorized (authentication required)
+- **✓** = Public endpoint (no authentication required)
+- (own) = Can only access own center's resource
+- (202) = Returns 202 Accepted for async operations
+
+Subscriptions & Billing:
+- **Automatic FREE trial:** Every new center starts with a FREE subscription (2-month trial).
+- **Plans & Pricing:** BASIC ($29.99/month), PRO ($79.99/month), ENTERPRISE ($199.99/month).
+- **Auto-calculation:** When plan changes, system auto-calculates subscription dates and prices.
+- **Auto-suspension:** Daily task checks FREE subscriptions; if expired, center is suspended.
 """
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -83,9 +139,15 @@ MULTI_TENANT_OVERVIEW = """
 INVITATION_CREATE_DESCRIPTION = """
 **Center Admin only.** Create one or multiple invitations. Teachers and students receive **403 Forbidden**.
 
-- **Single:** Omit `quantity` or set to `1`; response is one invitation object.
-- **Bulk:** Set `quantity` between 1 and 100; response is a list of invitations (each with a unique `code`).
-- **Guest invitations:** Set `is_guest=True` with `role=STUDENT`; these expire in 24 hours. Use for one-time student signup links.
+**Response Format:**
+- **Single (quantity=1):** Returns a single invitation object (not wrapped in array).
+- **Bulk (quantity>1):** Returns an array of invitation objects (each with unique `code` and `expires_at` if guest).
+
+**Invitation Types:**
+- **Standard (is_guest=False):** TEACHER or STUDENT roles; no expiration.
+- **Guest (is_guest=True):** Only STUDENT role; expires in 24 hours; use for one-time signup links.
+
+**Limits:** quantity must be between 1 and 100.
 """
 
 invitation_create_schema = extend_schema(
@@ -103,17 +165,17 @@ invitation_create_schema = extend_schema(
     },
     examples=[
         OpenApiExample(
-            "Single TEACHER invitation",
+            "Single TEACHER invitation (returns object, not array)",
             value={"role": "TEACHER", "is_guest": False, "quantity": 1},
             request_only=True,
         ),
         OpenApiExample(
-            "Bulk STUDENT invitations (10 codes)",
+            "Bulk STUDENT invitations (returns array of 10)",
             value={"role": "STUDENT", "is_guest": False, "quantity": 10},
             request_only=True,
         ),
         OpenApiExample(
-            "Bulk guest STUDENT invitations (24h expiry)",
+            "Bulk guest STUDENT invitations (24h expiry, returns array of 5)",
             value={"role": "STUDENT", "is_guest": True, "quantity": 5},
             request_only=True,
         ),
@@ -231,25 +293,57 @@ center_create_schema = extend_schema(
 OWNER_CENTER_LIST_DESCRIPTION = """
 **Owner only.** List all centers with teacher count and center admin emails.
 
-**List optimization:** The API prefetches center admins (CENTER_ADMIN users) per center to avoid N+1 queries. Each item includes `centeradmin_emails` (id, email, first_name, last_name) and `teacher_count`.
+**Batch Optimization:** The API prefetches center admins (all users with role=CENTER_ADMIN and is_active=True) 
+per center to avoid N+1 queries. Each item includes:
+- `teacher_count`: Integer count of TEACHER users in the center (pre-calculated).
+- `centeradmin_emails`: Array of center admin objects with structure: `[{"id": int, "email": str, "first_name": str, "last_name": str}, ...]`
+- `center_avatar`: URL to center's avatar image (or null).
+- `plan_name`: Display name of current subscription plan (e.g., "Free Trial", "Professional", "Enterprise").
 
 **Filters:** `status` (TRIAL | ACTIVE | SUSPENDED), `is_active` (bool).
 
 **Search:** name, description, address, email.
 
 **Ordering:** created_at, name (default: -created_at).
+
+**Example Response Item:**
+```json
+{
+  "id": 1,
+  "center_name": "JLPT Academy Tokyo",
+  "center_avatar": "https://cdn.mikan.uz/center_avatars/center_1.jpg",
+  "centeradmin_emails": [
+    {"id": 10, "email": "admin1@jlpt.tokyo", "first_name": "Hiroshi", "last_name": "Tanaka"},
+    {"id": 11, "email": "admin2@jlpt.tokyo", "first_name": "Yuki", "last_name": "Yamamoto"}
+  ],
+  "teacher_count": 5,
+  "plan_name": "Professional",
+  "status": "ACTIVE",
+  "created_at": "2024-01-15T10:00:00Z"
+}
+```
 """
 
 OWNER_CENTER_DESTROY_DESCRIPTION = """
-**Owner only.** Permanently delete a center. Returns **202 Accepted** (not 204). The deletion runs **asynchronously** in a background task.
+**Owner only.** Permanently delete a center. Returns **202 Accepted** (not 204). The deletion runs **asynchronously** 
+in a background Celery task and **cannot be canceled or undone**.
 
-**Irreversible.** The task will:
-1. **Users:** Hard-delete all users belonging to this center (including S3 avatars).
-2. **Public data:** Delete invitations, contact requests (by center name), subscriptions linked to this center.
-3. **Tenant schema:** DROP the PostgreSQL schema for this tenant (all tenant tables and data).
-4. **Center:** Hard-delete the center record and its avatar from S3.
+**Task steps (executed in order):**
+1. **All center users:** Hard-delete all users with `center_id=this_center` (soft-deleted users become permanent).
+   - Each user's S3 avatars are deleted.
+   - No notification sent to users; access is immediately revoked.
+2. **Tenant data:** DROP the PostgreSQL schema for this tenant (CASCADE).
+   - All tables, data, indexes in the tenant schema are permanently deleted.
+   - This is fast but irrevocable.
+3. **Public data:** Delete all invitations, subscriptions, and contact requests for this center.
+4. **Center record:** Hard-delete the center (and its avatar S3 file).
 
-Do not assume the center is removed immediately; poll or avoid reusing the center id until the task has completed. Teachers and students receive **403** if they attempt this endpoint.
+**Timing:** The task may take **1-5 minutes** depending on center size. Do not assume the center is removed immediately; 
+the API returns 202 while the task runs in the background.
+
+**Response:** Includes the center_id and message so the client knows which center is being deleted.
+
+**Permission:** OWNER only. Teachers and students receive **403 Forbidden**.
 """
 
 owner_center_viewset_schema = extend_schema_view(
@@ -633,17 +727,35 @@ guest_upgrade_schema = extend_schema(
 OWNER_SUBSCRIPTION_VIEWSET_DESCRIPTION = """
 **Owner only.** Manage subscriptions for all centers.
 
-Subscription lifecycle:
-- **FREE plan:** Created automatically when a center is created. Lasts 2 months, then center is auto-suspended.
-- **BASIC / PRO / ENTERPRISE:** Owner manually upgrades centers from FREE or SUSPENDED status.
-- **Auto-suspension:** A daily Celery task checks for expired FREE subscriptions and suspends centers automatically.
+**Subscription Plans & Pricing (Auto-Calculated):**
+- **FREE:** $0/month, 2-month trial. Auto-suspends center when trial expires.
+- **BASIC:** $29.99/month (1-month billing cycle).
+- **PRO:** $79.99/month (1-month billing cycle).
+- **ENTERPRISE:** $199.99/month (1-month billing cycle).
 
-Owner can:
-- List all subscriptions with filtering by plan and status
-- View detailed subscription information
-- Upgrade/downgrade subscription plans (PATCH /owner-subscriptions/{id}/ or POST /owner-subscriptions/{id}/upgrade/)
+**Plan Change Behavior:**
+When Owner upgrades a center from FREE → BASIC/PRO/ENTERPRISE:
+1. `plan` is updated to new plan.
+2. `price` is auto-set to plan's monthly rate.
+3. `starts_at` is set to current time (now).
+4. `ends_at` is calculated as now + 30 days (for 1-month cycles).
+5. `is_active` is set to True.
+6. `auto_renew` is set to True (unless plan is FREE).
+7. Center's status is updated to ACTIVE (if not already).
 
-Note: Payment integration is not yet implemented. This is manual subscription management for MVP.
+**Subscription Lifecycle:**
+- **Creation:** Every new center automatically gets a FREE subscription with 2-month expiry.
+- **Trial expiry:** A daily Celery task checks FREE subscriptions; if `ends_at < now`, center is automatically suspended.
+- **Upgrade:** Owner manually upgrades plan via PATCH or POST /owner-subscriptions/{id}/upgrade/.
+- **Manual downgrade:** Owner can change plan back to FREE (not recommended).
+
+**Owner capabilities:**
+- List all subscriptions with filtering by plan (FREE/BASIC/PRO/ENTERPRISE) and status (active).
+- View detailed subscription info including pricing, dates, days remaining.
+- Upgrade/downgrade plans via PATCH or POST upgrade action.
+- Search subscriptions by center name.
+
+**Note:** Payment integration is not yet implemented. Subscriptions are manually managed for MVP.
 """
 
 owner_subscription_viewset_schema = extend_schema_view(
@@ -672,11 +784,59 @@ owner_subscription_viewset_schema = extend_schema_view(
             403: RESP_403,
             404: RESP_404,
         },
+        examples=[
+            OpenApiExample(
+                "FREE subscription (trial)",
+                value={
+                    "id": 1,
+                    "center_id": 1,
+                    "center_name": "Test Center",
+                    "plan": "FREE",
+                    "plan_display": "Free Trial",
+                    "price": "0.00",
+                    "currency": "USD",
+                    "billing_cycle": "monthly",
+                    "next_billing_date": "2026-04-10",
+                    "starts_at": "2026-02-10T00:00:00Z",
+                    "ends_at": "2026-04-10T23:59:59Z",
+                    "is_active": True,
+                    "auto_renew": False,
+                    "is_expired": False,
+                    "days_remaining": 59,
+                    "created_at": "2026-02-10T00:00:00Z",
+                    "updated_at": "2026-02-10T00:00:00Z"
+                },
+                response_only=True,
+            ),
+            OpenApiExample(
+                "BASIC subscription (upgraded)",
+                value={
+                    "id": 2,
+                    "center_id": 2,
+                    "center_name": "JLPT Academy",
+                    "plan": "BASIC",
+                    "plan_display": "Basic",
+                    "price": "29.99",
+                    "currency": "USD",
+                    "billing_cycle": "monthly",
+                    "next_billing_date": "2026-03-12",
+                    "starts_at": "2026-02-10T14:30:00Z",
+                    "ends_at": "2026-03-12T14:30:00Z",
+                    "is_active": True,
+                    "auto_renew": True,
+                    "is_expired": False,
+                    "days_remaining": 30,
+                    "created_at": "2026-02-10T00:00:00Z",
+                    "updated_at": "2026-02-10T14:30:00Z"
+                },
+                response_only=True,
+            ),
+        ],
     ),
     partial_update=extend_schema(
         tags=["Owner – Centers / Admins / Requests"],
         summary="Update subscription plan",
-        description="**Owner only.** Update subscription plan. Only `plan` field can be changed.",
+        description="**Owner only.** Update subscription plan (only `plan` field). Dates and pricing auto-calculated.",
         request=SubscriptionUpdateSerializer,
         responses={
             200: SubscriptionDetailSerializer,
@@ -687,12 +847,12 @@ owner_subscription_viewset_schema = extend_schema_view(
         },
         examples=[
             OpenApiExample(
-                "Upgrade to BASIC",
+                "Upgrade FREE to BASIC",
                 value={"plan": "BASIC"},
                 request_only=True,
             ),
             OpenApiExample(
-                "Upgrade to PRO",
+                "Upgrade BASIC to PRO",
                 value={"plan": "PRO"},
                 request_only=True,
             ),
@@ -706,25 +866,52 @@ owner_subscription_viewset_schema = extend_schema_view(
     upgrade=extend_schema(
         tags=["Owner – Centers / Admins / Requests"],
         summary="Upgrade subscription (convenience endpoint)",
-        description="**Owner only.** Convenience endpoint to upgrade a subscription plan.",
+        description="**Owner only.** Convenience endpoint to upgrade a subscription plan. Equivalent to PATCH but with better semantics.",
         request=SubscriptionUpdateSerializer,
         responses={
             200: OpenApiResponse(
-                description="Subscription upgraded successfully",
+                description="Subscription upgraded successfully; returns detail with new pricing and dates.",
                 examples=[
                     OpenApiExample(
-                        "Success",
+                        "Upgraded to BASIC",
                         value={
-                            "detail": "Subscription upgraded to Professional",
+                            "detail": "Subscription upgraded to Basic",
                             "subscription": {
                                 "id": 1,
                                 "center_id": 1,
-                                "center_name": "Tokyo Language Center",
-                                "plan": "PRO",
-                                "plan_display": "Professional",
-                                "price": "79.99",
+                                "center_name": "JLPT Academy",
+                                "plan": "BASIC",
+                                "plan_display": "Basic",
+                                "price": "29.99",
                                 "currency": "USD",
+                                "billing_cycle": "monthly",
+                                "starts_at": "2026-02-10T14:45:00Z",
+                                "ends_at": "2026-03-12T14:45:00Z",
                                 "is_active": True,
+                                "auto_renew": True,
+                                "days_remaining": 30,
+                            }
+                        },
+                        response_only=True,
+                    ),
+                    OpenApiExample(
+                        "Upgraded to ENTERPRISE",
+                        value={
+                            "detail": "Subscription upgraded to Enterprise",
+                            "subscription": {
+                                "id": 3,
+                                "center_id": 3,
+                                "center_name": "Tokyo Language Institute",
+                                "plan": "ENTERPRISE",
+                                "plan_display": "Enterprise",
+                                "price": "199.99",
+                                "currency": "USD",
+                                "billing_cycle": "monthly",
+                                "starts_at": "2026-02-10T15:00:00Z",
+                                "ends_at": "2026-03-12T15:00:00Z",
+                                "is_active": True,
+                                "auto_renew": True,
+                                "days_remaining": 30,
                             }
                         },
                         response_only=True,
@@ -736,6 +923,13 @@ owner_subscription_viewset_schema = extend_schema_view(
             403: RESP_403,
             404: RESP_404,
         },
+        examples=[
+            OpenApiExample(
+                "Upgrade to PRO",
+                value={"plan": "PRO"},
+                request_only=True,
+            ),
+        ],
     ),
 )
 
@@ -767,5 +961,225 @@ center_admin_subscription_detail_schema = extend_schema(
         401: RESP_401,
         403: OpenApiResponse(description="Only CENTER_ADMIN can view subscription."),
         404: OpenApiResponse(description="No subscription found for your center."),
+    },
+)
+
+
+# =============================================================================
+# Center Admin – Admin Management (for managing admins in the center)
+# =============================================================================
+
+CENTERADMIN_ADMIN_LIST_DESCRIPTION = """
+**Center Admin only.** List all admins in your center.
+
+**Role-based Access:**
+- **Center Admin:** Can only list admins from their own center.
+- **Owner:** Use the Owner endpoint (owner-center-admins) to manage admins globally.
+
+**Data Structure – centeradmin_emails:**
+Each admin in the response is returned with the following structure:
+```json
+{
+  "id": 10,
+  "email": "admin1@center.com",
+  "first_name": "Taro",
+  "last_name": "Yamada",
+  "center_id": 1,
+  "role": "center_admin",
+  "created_at": "2026-01-15T10:00:00Z",
+  "is_active": true,
+  "last_login": "2026-02-08T14:30:00Z"
+}
+```
+
+**Search:** Filter by email, first_name, or last_name.
+
+**Filtering & Sorting:**
+- `search`: Email or name prefix search.
+- `ordering`: created_at, email, last_login (default: -created_at).
+
+**Note:** Invitations are managed separately; use the "Invitations" endpoint to invite new admins.
+"""
+
+CENTER_ADMIN_ADMIN_ADD_DESCRIPTION = """
+**Center Admin only.** Add a new admin to your center.
+
+**How it works:**
+1. You provide the email address of the user to add as admin.
+2. If the user doesn't exist in the system, a new inactive user is created with a random password.
+3. If the user already exists, they are assigned the center_admin role for your center.
+4. An invitation email is automatically sent (if email is configured).
+5. The new admin must accept the invitation and set their own password.
+
+**Input:**
+- `email`: Valid email address (must be unique in the system).
+
+**Response includes:**
+- User ID, email, name (if known).
+- Center assignment.
+- Creation timestamp.
+- Detail message confirming the invitation was sent.
+
+**Important:**
+- Each admin can only be added once to the center.
+- If the email already belongs to an admin in this center, the request fails with a 400 error.
+- Bulk invitations should use the center-level invitations endpoint instead.
+"""
+
+CENTER_ADMIN_ADMIN_REMOVE_DESCRIPTION = """
+**Center Admin only.** Remove an admin from your center.
+
+**Important:**
+- The user is **not deleted** from the system; only their center_admin role for this center is removed.
+- If the user has other roles, they can still use the system.
+- You cannot remove yourself (use a different admin account).
+- You cannot remove the center owner if they are also an admin.
+
+**Response:** 204 No Content on success.
+"""
+
+center_admin_admin_list_schema = extend_schema(
+    tags=["Center Admin – Admins"],
+    summary="List admins in my center",
+    description=CENTERADMIN_ADMIN_LIST_DESCRIPTION,
+    responses={
+        200: CenterAdminListSerializer(many=True),
+        401: RESP_401,
+        403: RESP_403,
+    },
+    parameters=[
+        OpenApiParameter(
+            name="search",
+            description="Search by email, first_name, or last_name",
+        ),
+        OpenApiParameter(
+            name="ordering",
+            description="Order by created_at, email, or last_login (default: -created_at)",
+        ),
+    ],
+    examples=[
+        OpenApiExample(
+            "List of center admins",
+            value=[
+                {
+                    "id": 2,
+                    "email": "admin1@center.com",
+                    "first_name": "Taro",
+                    "last_name": "Yamada",
+                    "center_id": 1,
+                    "role": "center_admin",
+                    "created_at": "2026-01-15T10:00:00Z",
+                    "is_active": True,
+                    "last_login": "2026-02-08T14:30:00Z"
+                },
+                {
+                    "id": 3,
+                    "email": "admin2@center.com",
+                    "first_name": "Hanako",
+                    "last_name": "Tanaka",
+                    "center_id": 1,
+                    "role": "center_admin",
+                    "created_at": "2026-01-20T11:00:00Z",
+                    "is_active": True,
+                    "last_login": "2026-02-07T09:15:00Z"
+                }
+            ],
+            response_only=True,
+        ),
+    ],
+)
+
+center_admin_admin_add_schema = extend_schema(
+    tags=["Center Admin – Admins"],
+    summary="Add a new admin to my center",
+    description=CENTER_ADMIN_ADMIN_ADD_DESCRIPTION,
+    request={
+        "application/json": {
+            "type": "object",
+            "required": ["email"],
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Email address of the user to add as admin",
+                    "example": "newadmin@center.com"
+                }
+            }
+        }
+    },
+    responses={
+        201: OpenApiResponse(
+            description="Admin added successfully; invitation sent",
+            examples=[
+                OpenApiExample(
+                    "New admin created (inactive user)",
+                    value={
+                        "id": 5,
+                        "email": "new.admin@center.com",
+                        "first_name": "",
+                        "last_name": "",
+                        "center_id": 1,
+                        "role": "center_admin",
+                        "created_at": "2026-02-10T15:30:00Z",
+                        "is_active": False,
+                        "last_login": None,
+                        "detail": "Admin invitation sent to new.admin@center.com"
+                    },
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Existing user assigned as admin",
+                    value={
+                        "id": 4,
+                        "email": "existing.user@gmail.com",
+                        "first_name": "John",
+                        "last_name": "Doe",
+                        "center_id": 1,
+                        "role": "center_admin",
+                        "created_at": "2026-02-10T15:35:00Z",
+                        "is_active": True,
+                        "last_login": "2026-02-05T10:00:00Z",
+                        "detail": "User assigned to center as admin. Notification sent."
+                    },
+                    response_only=True,
+                ),
+            ],
+        ),
+        400: OpenApiResponse(
+            description="Validation error (email invalid, already admin for this center, etc.)",
+            examples=[
+                OpenApiExample(
+                    "Already admin",
+                    value={"email": ["This user is already an admin for this center."]},
+                    response_only=True,
+                ),
+                OpenApiExample(
+                    "Invalid email",
+                    value={"email": ["Enter a valid email address."]},
+                    response_only=True,
+                ),
+            ],
+        ),
+        401: RESP_401,
+        403: RESP_403,
+    },
+    examples=[
+        OpenApiExample(
+            "Add new admin by email",
+            value={"email": "newadmin@center.com"},
+            request_only=True,
+        ),
+    ],
+)
+
+center_admin_admin_remove_schema = extend_schema(
+    tags=["Center Admin – Admins"],
+    summary="Remove admin from my center",
+    description=CENTER_ADMIN_ADMIN_REMOVE_DESCRIPTION,
+    responses={
+        204: None,
+        401: RESP_401,
+        403: RESP_403,
+        404: RESP_404,
     },
 )

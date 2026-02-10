@@ -68,9 +68,24 @@ class TenantAwareJWTAuthentication(BaseJWTAuthentication):
             request.tenant_schema = schema_name
             logger.info("TenantAwareJWT: Switched to schema: %s", schema_name)
         except Exception as e:
-            logger.exception("TenantAwareJWT: Failed to switch to %s", schema_name)
+            # SECURITY: Do NOT silently fall back to public — the tenant user
+            # would see public-schema objects (Centers, Owners). Reject instead.
+            logger.exception(
+                "TenantAwareJWT: Failed to switch to schema %s for user %s",
+                schema_name,
+                user.pk,
+            )
             set_public_schema()
-            request.tenant_schema = "public"
+            raise AuthenticationFailed(
+                {
+                    "error": "SCHEMA_SWITCH_FAILED",
+                    "message": (
+                        "Unable to connect to your center's data store. "
+                        "Please try again or contact support."
+                    ),
+                    "retry_after": 10,
+                }
+            )
         return (user, token)
 
     def _get_center(self, center_id):

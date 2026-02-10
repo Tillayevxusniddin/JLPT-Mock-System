@@ -1,16 +1,6 @@
 #api/v1/urls.py
 from django.urls import path, include
 
-from apps.authentication.views import (
-    RegisterView,
-    LoginView,
-    MeView,
-    LogoutView,
-    UpdatePasswordView,
-    PasswordResetRequestView,
-    PasswordResetConfirmView,
-    UserAvatarUploadView,
-)
 from apps.analytics.views import (
     OwnerAnalyticsView,
     CenterAdminAnalyticsView,
@@ -33,30 +23,8 @@ from .routers import api_router
 
 
 urlpatterns = [
-    # Router-registered viewsets (centers, groups, materials, mock-tests, assignments, attempts, notifications, etc.)
+    # Router-registered viewsets (users, centers, groups, materials, mock-tests, assignments, attempts, notifications, etc.)
     path("", include(api_router.urls)),
-
-    # Authentication endpoints
-    path("auth/register/", RegisterView.as_view(), name="auth-register"),
-    path("auth/login/", LoginView.as_view(), name="auth-login"),
-    path("auth/me/", MeView.as_view(), name="auth-me"),
-    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
-    path("auth/password/update/", UpdatePasswordView.as_view(), name="auth-password-update"),
-    path(
-        "auth/password/reset/",
-        PasswordResetRequestView.as_view(),
-        name="auth-password-reset-request",
-    ),
-    path(
-        "auth/password/reset/confirm/",
-        PasswordResetConfirmView.as_view(),
-        name="auth-password-reset-confirm",
-    ),
-    path(
-        "auth/avatar/",
-        UserAvatarUploadView.as_view(),
-        name="auth-avatar-upload",
-    ),
 
     # Analytics dashboards
     path(

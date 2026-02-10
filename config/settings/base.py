@@ -82,7 +82,10 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'apps.core.middleware.TenantMiddleware',
+    # TenantMiddleware removed: SchemaResetWrapperMiddleware (position 0) already
+    # resets search_path to public in both __call__ entry AND finally block,
+    # making the triple-reset in TenantMiddleware redundant (saves ~3 DB
+    # round-trips per request).
     "axes.middleware.AxesMiddleware",
 
 ]

@@ -79,9 +79,30 @@ wait_for_redis() {
     local attempt=1
     local wait_time=1
     
+    # Extract password from REDIS_URL if present (redis://:password@host:port/db)
+    local redis_password=""
+    if echo "$REDIS_URL" | grep -q '://:.\+@'; then
+        redis_password=$(echo "$REDIS_URL" | sed -n 's|.*://:\([^@]*\)@.*|\1|p')
+    fi
+    
     while [ $attempt -le $max_attempts ]; do
-        if timeout 2 redis-cli -u "$REDIS_URL" ping >/dev/null 2>&1 || \
-           timeout 2 redis-cli PING >/dev/null 2>&1; then
+        local ping_ok=0
+        if [ -n "$redis_password" ]; then
+            # Authenticated Redis
+            if timeout 2 redis-cli -u "$REDIS_URL" ping >/dev/null 2>&1; then
+                ping_ok=1
+            elif timeout 2 redis-cli -a "$redis_password" PING >/dev/null 2>&1; then
+                ping_ok=1
+            fi
+        else
+            # Unauthenticated Redis
+            if timeout 2 redis-cli -u "$REDIS_URL" ping >/dev/null 2>&1 || \
+               timeout 2 redis-cli PING >/dev/null 2>&1; then
+                ping_ok=1
+            fi
+        fi
+        
+        if [ $ping_ok -eq 1 ]; then
             log_info "Redis is ready!"
             return 0
         fi
@@ -102,75 +123,133 @@ wait_for_redis() {
 ##############################################################################
 # 3) ACQUIRE DISTRIBUTED LOCK via PostgreSQL Advisory Lock
 #
-# Advisory locks are unique row-level locks in PostgreSQL that don't require
-# a table. We use a fixed lock ID (0xDEADBEEF = 3735928559) for migrations.
+# CRITICAL FIX: The advisory lock AND migrations MUST run inside the SAME
+# database session (Python process). pg_try_advisory_lock is session-scoped:
+# it releases automatically when the connection/session closes. If we
+# acquired the lock in one `python manage.py shell` invocation and then
+# ran `python manage.py migrate` in a separate process, the lock would
+# already be released before migrations even start — defeating its purpose.
 #
-# This ensures only ONE container runs migrations at a time, even with
-# multiple replicas. The lock is automatically released when the connection
-# closes or on timeout (30 seconds).
+# Solution: A single Python script acquires the lock, runs both public and
+# tenant migrations via Django's call_command(), and only releases the lock
+# (by closing the session) AFTER all migrations complete.
 #
+# Lock ID: 0xDEADBEEF = 3735928559 (arbitrary but fixed)
 # Reference: https://www.postgresql.org/docs/current/explicit-locking.html
 ##############################################################################
 run_migrations_with_lock() {
-    local lock_id=3735928559  # Fixed advisory lock ID (0xDEADBEEF)
-    local lock_acquired=0
-    local lock_timeout=30  # seconds
-    
-    log_info "Attempting to acquire PostgreSQL advisory lock (ID: $lock_id, timeout: ${lock_timeout}s)..."
-    
-    # Try to acquire the advisory lock with timeout
-    if timeout "$lock_timeout" python manage.py shell << 'EOF'
+    log_info "Attempting to acquire PostgreSQL advisory lock and run migrations..."
+
+    python << 'MIGRATE_SCRIPT'
 import sys
+import time
+
+# Bootstrap Django before any ORM usage
+import django
+django.setup()
+
 from django.db import connection
+from django.core.management import call_command
 
-lock_id = 3735928559
+LOCK_ID = 3735928559  # 0xDEADBEEF
+MAX_WAIT = 60         # seconds to wait for the lock
+POLL_INTERVAL = 2     # seconds between retries
 
-# Attempt non-blocking lock
-with connection.cursor() as cursor:
-    cursor.execute("SELECT pg_try_advisory_lock(%s)", [lock_id])
-    acquired = cursor.fetchone()[0]
-    
-    if not acquired:
-        print("[ERROR] Failed to acquire lock. Another migration is in progress.")
+def run():
+    """Acquire advisory lock, run migrations, then exit (releasing the lock)."""
+    elapsed = 0
+
+    # --- Acquire the advisory lock (non-blocking retry loop) ---
+    while elapsed < MAX_WAIT:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", [LOCK_ID])
+            acquired = cursor.fetchone()[0]
+
+        if acquired:
+            print(f"[OK] Advisory lock acquired (ID: {LOCK_ID})")
+            break
+
+        print(f"[WAIT] Lock held by another container, retrying in {POLL_INTERVAL}s... ({elapsed}/{MAX_WAIT}s)")
+        time.sleep(POLL_INTERVAL)
+        elapsed += POLL_INTERVAL
+    else:
+        print(f"[ERROR] Could not acquire migration lock after {MAX_WAIT}s. Another migration is still running.")
         sys.exit(1)
-    
-    print(f"[OK] Lock acquired (ID: {lock_id})")
-    
-    # Now we have the lock; proceed with migrations
-EOF
-    then
-        lock_acquired=1
-    else
-        log_error "Failed to acquire migration lock (lock held by another container)"
+
+    # --- Run migrations while we hold the lock (same session!) ---
+    try:
+        print("[MIGRATE] Step 1/2: Public schema migration (manage.py migrate --noinput)...")
+        call_command("migrate", "--noinput")
+        print("[OK] Public schema migrated successfully.")
+
+        print("[MIGRATE] Step 2/2: Tenant schema migration (manage.py migrate_tenants --skip-public)...")
+        try:
+            call_command("migrate_tenants", "--skip-public")
+            print("[OK] All tenant schemas migrated successfully.")
+        except Exception as e:
+            # migrate_tenants may not exist if not using django-tenants; treat as non-fatal warning
+            if "Unknown command" in str(e):
+                print(f"[WARN] migrate_tenants command not found, skipping tenant migrations: {e}")
+            else:
+                raise
+
+        print("[OK] All migrations completed successfully.")
+    except Exception as exc:
+        print(f"[ERROR] Migration failed: {exc}")
+        sys.exit(1)
+    finally:
+        # Explicitly release the advisory lock (good practice, though session
+        # close would release it anyway).
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", [LOCK_ID])
+            print(f"[OK] Advisory lock released (ID: {LOCK_ID})")
+        except Exception:
+            pass  # Lock will be released when session closes regardless
+
+run()
+MIGRATE_SCRIPT
+
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        log_error "Migration script exited with code $exit_code"
         return 1
     fi
-    
-    if [ $lock_acquired -eq 1 ]; then
-        log_info "Lock acquired successfully! Running migrations..."
-        
-        # Public schema migration
-        log_info "Step 1/2: Running 'python manage.py migrate --noinput' (public schema)..."
-        if ! python manage.py migrate --noinput; then
-            log_error "Public schema migration failed!"
-            return 1
+
+    log_info "✓ Migrations completed successfully"
+    return 0
+}
+
+##############################################################################
+# 4) PGBOUNCER USERLIST PASSWORD INJECTION
+#
+# The template deployment/userlist.txt contains ${POSTGRES_PASSWORD}.
+# At runtime, envsubst replaces it with the actual password from the
+# environment. This avoids baking secrets into the Docker image.
+#
+# Only the 'web' service runs this (it's the migration leader), but
+# we provide it for any service that mounts the PgBouncer volume.
+##############################################################################
+inject_pgbouncer_password() {
+    local template="/app/deployment/userlist.txt"
+    local target="/etc/pgbouncer/userlist.txt"
+
+    # Only run if the template exists AND we have write access to the target dir
+    if [ -f "$template" ] && [ -d "$(dirname "$target")" ]; then
+        if command -v envsubst >/dev/null 2>&1; then
+            log_info "Injecting POSTGRES_PASSWORD into PgBouncer userlist.txt..."
+            envsubst < "$template" > "$target"
+            chmod 600 "$target" 2>/dev/null || true
+            log_info "✓ PgBouncer userlist.txt updated"
+        else
+            log_warn "envsubst not found, using sed fallback for PgBouncer userlist.txt"
+            sed "s/\${POSTGRES_PASSWORD}/${POSTGRES_PASSWORD}/g" "$template" > "$target" 2>/dev/null || true
         fi
-        log_info "✓ Public schema migrated successfully"
-        
-        # Tenant schema migrations
-        log_info "Step 2/2: Running 'python manage.py migrate_tenants --skip-public' (all tenant schemas)..."
-        if ! python manage.py migrate_tenants --skip-public; then
-            log_error "Tenant schema migration failed!"
-            return 1
-        fi
-        log_info "✓ All tenant schemas migrated successfully"
-        
-        log_info "✓ All migrations completed successfully"
-        return 0
     fi
 }
 
 ##############################################################################
-# 4) COLLECT STATIC FILES (only if not already collected)
+# 5) COLLECT STATIC FILES (only if not already collected)
 #
 # We check if `staticfiles/` directory exists and has content before
 # running collectstatic. This avoids redundant I/O on every container start.
@@ -193,7 +272,7 @@ collect_static_files() {
 }
 
 ##############################################################################
-# 5) MAIN DISPATCHER – Route to appropriate service
+# 6) MAIN DISPATCHER – Route to appropriate service
 ##############################################################################
 main() {
     local service="${1:-web}"
@@ -214,7 +293,10 @@ main() {
     
     log_info "All dependencies are ready!"
     
-    # Step 2: Run migrations (only for 'web' service; others skip)
+    # Step 2: Inject PgBouncer password (if template exists)
+    inject_pgbouncer_password
+    
+    # Step 3: Run migrations (only for 'web' service; others skip)
     if [ "$service" = "web" ]; then
         log_info "=== MIGRATION PHASE ==="
         if ! run_migrations_with_lock; then
@@ -222,7 +304,7 @@ main() {
             exit 1
         fi
         
-        # Step 3: Collect static files
+        # Step 4: Collect static files
         log_info "=== STATIC FILES PHASE ==="
         if ! collect_static_files; then
             log_warn "Static file collection failed, but continuing (may be S3-backed)..."
