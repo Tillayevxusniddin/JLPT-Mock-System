@@ -43,28 +43,32 @@ def _normalize_host(host):
 
 class TenantAwareBackend(ModelBackend):
     """
-    Subdomain-based authentication. Resolves center from request.get_host()
-    so the same email in two centers cannot log into the wrong one.
+    Email/password authentication for all users regardless of subdomain.
+    
+    Note: Subdomain validation removed to support centralized login on main domain.
+    Tenant context is carried by JWT token after authentication.
     """
 
     def authenticate(self, request, username=None, password=None, **kwargs):
         if username is None:
             username = kwargs.get(User.USERNAME_FIELD)
-        center_id = self._get_center_id_from_subdomain(request) if request else None
 
         try:
-            if center_id:
-                user = User.objects.get(email=username, center_id=center_id)
-            else:
-                user = User.objects.get(email=username, center__isnull=True)
+            user = User.objects.get(email=username)
         except User.DoesNotExist:
-            logger.debug("User not found: email=%s, center_id=%s", username, center_id)
+            logger.debug("User not found: email=%s", username)
             return None
         except User.MultipleObjectsReturned:
-            logger.warning(
-                "Multiple users for email=%s, center_id=%s", username, center_id
-            )
-            return None
+            # If same email exists in multiple centers, get the first active one
+            # Frontend can add center selection UI later if needed
+            logger.warning("Multiple users for email=%s, using first active", username)
+            user = User.objects.filter(
+                email=username,
+                is_active=True,
+                deleted_at__isnull=True
+            ).first()
+            if not user:
+                return None
 
         if not user.check_password(password):
             return None
@@ -77,7 +81,7 @@ class TenantAwareBackend(ModelBackend):
         logger.info(
             "Authenticated %s (center_id=%s)",
             user.email,
-            center_id,
+            user.center_id if user.center_id else "None",
         )
         return user
 
