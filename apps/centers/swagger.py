@@ -18,9 +18,9 @@ Multi-tenant context:
   tenant schema (DROP SCHEMA CASCADE), invitations, contact requests, subscriptions,
   and the center record (irreversible). The task may take minutes; do not assume 
   immediate deletion.
-- **Slug / subdomain:** The center's `slug` (auto-generated from name or set on
-  create) determines the tenant's subdomain. Example: slug `edu1` → `edu1.mikan.uz`.
-  Users access the center's app at `https://{slug}.mikan.uz`. Slug must be unique.
+- **Slug / schema:** The center's `slug` (auto-generated from name or set on
+  create) determines the tenant's PostgreSQL schema name for data isolation.
+  The frontend may use the slug as a URL prefix for branding. Slug must be unique.
 
 =============================================================================
 ROLE-BASED ACCESS CONTROL (RBAC) MATRIX
@@ -127,8 +127,8 @@ MULTI_TENANT_OVERVIEW = """
 - **Create center:** Returns 201. The center is created with `is_ready: false`. A background task runs tenant schema migrations; when complete, `is_ready` is set to `true`. The frontend may poll the center detail or show a "Setting up your center" state until `is_ready` is true.
 - **Destroy center:** Returns **202 Accepted** (not 204). A background task is queued that permanently deletes: all center users (and their S3 avatars), the tenant PostgreSQL schema, invitations, contact requests, subscriptions, and the center record. **This operation is irreversible.** Do not assume the center is gone immediately; the task may take minutes.
 
-**Slug and subdomain**
-- Each center has a unique `slug` (e.g. `edu1`). It is auto-generated from the center name on create (or can be set). The tenant's app is accessed at `https://{slug}.mikan.uz`. Frontend should use `slug` to build tenant-specific URLs.
+**Slug and schema**
+- Each center has a unique `slug` (e.g. `edu1`). It is auto-generated from the center name on create (or can be set). The slug determines the PostgreSQL schema name for data isolation. The frontend may use the slug to build center-specific URLs (e.g. `https://{slug}.mikan.uz` or a path prefix).
 """
 
 
@@ -247,9 +247,9 @@ invitation_approve_schema = extend_schema(
 CENTER_CREATE_DESCRIPTION = """
 **Owner only.** Create a new center (tenant). Teachers and students receive **403 Forbidden**.
 
-**Asynchronous setup:** The center is created with `is_ready: false`. A PostgreSQL schema is created and a background task runs tenant migrations. When the task completes, `is_ready` is set to `true`. Poll the center resource or list until `is_ready` is true before directing users to the tenant subdomain.
+**Asynchronous setup:** The center is created with `is_ready: false`. A PostgreSQL schema is created and a background task runs tenant migrations. When the task completes, `is_ready` is set to `true`. Poll the center resource or list until `is_ready` is true before using center features.
 
-**Slug / subdomain:** If `slug` is not provided, it is auto-generated from `name` (e.g. "JLPT Academy" → slug `jlpt-academy`). The center will be accessible at `https://{slug}.mikan.uz`. Slug must be unique across the platform.
+**Slug / schema:** If `slug` is not provided, it is auto-generated from `name` (e.g. "JLPT Academy" → slug `jlpt-academy`). The slug determines the tenant PostgreSQL schema name. Slug must be unique across the platform.
 """
 
 center_create_schema = extend_schema(

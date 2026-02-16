@@ -12,7 +12,7 @@ class User(PublicBaseModel, AbstractUser):
     id = models.BigAutoField(primary_key=True)
 
     username = None
-    email = models.EmailField(unique=False)     
+    email = models.EmailField(unique=True)     
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
@@ -51,13 +51,6 @@ class User(PublicBaseModel, AbstractUser):
         indexes = [
             models.Index(fields=['email', 'is_active']),
             models.Index(fields=['center_id', 'role']),
-        ]
-
-        constraints = [
-            models.UniqueConstraint(
-                fields=['email', 'center'],
-                name='unique_email_per_center'
-            )
         ]
 
     def __str__(self):

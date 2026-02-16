@@ -1,10 +1,10 @@
 # apps/authentication/serializers.py
 """
-Authentication serializers for multi-tenant JLPT system.
+Authentication serializers for JLPT system.
 
 - All User lookups use the default manager (SoftDeleteUserManager), so
   soft-deleted users cannot log in or reset password.
-- Email uniqueness is enforced per center (UniqueConstraint + validation).
+- Email is globally unique across the platform.
 """
 import logging
 
@@ -142,12 +142,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_email(self, value):
-        request = self.context.get("request")
-        if not request or not getattr(request.user, "center_id", None):
-            return value
-        if User.objects.filter(email=value, center_id=request.user.center_id).exists():
+        if User.objects.filter(email=value).exists():
             raise serializers.ValidationError(
-                "A user with this email already exists in this center."
+                "A user with this email already exists."
             )
         return value
 
@@ -275,12 +272,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
         return get_user_groups_from_tenant(obj)
 
     def validate_email(self, value):
-        request = self.context.get("request")
-        if not request or not getattr(request.user, "center_id", None):
-            return value
-        if User.objects.filter(email=value, center_id=request.user.center_id).exists():
+        if User.objects.filter(email=value).exists():
             raise serializers.ValidationError(
-                "A user with this email already exists in this center."
+                "A user with this email already exists."
             )
         return value
 
@@ -341,9 +335,9 @@ class RegisterSerializer(serializers.ModelSerializer):
                 ),
             })
         email = data.get("email")
-        if email and User.objects.filter(email=email, center_id=invitation.center_id).exists():
+        if email and User.objects.filter(email=email).exists():
             raise serializers.ValidationError(
-                {"email": "A user with this email already exists in this center."}
+                {"email": "A user with this email already exists."}
             )
         data["_invitation"] = invitation
         data.pop("invitation_code", None)

@@ -4,8 +4,8 @@ OpenAPI / Swagger documentation for the Authentication app.
 ENTERPRISE-GRADE API DOCUMENTATION for Frontend Integration.
 
 Core Concepts:
-- Multi-Tenant Architecture: Login/Register are tenant-aware (main domain vs subdomain).
-  Email uniqueness enforced per center; same email can exist in different centers.
+- Centralized Architecture: All users log in through the main domain (mikan.uz).
+  Email is globally unique across the platform. User's center is identified via center_id.
 - Role-Based Access Control: CENTER_ADMIN (full CRUD), TEACHER (list/retrieve students only),
   STUDENT/GUEST (self-service only), OWNER (platform-wide).
 - Security: Soft-deleted users blocked from login; rate-limited auth endpoints; 
@@ -76,13 +76,12 @@ Invitation codes are issued by a center's administrator for new students or teac
 Only users with role STUDENT or TEACHER can self-register; OWNER and CENTER_ADMIN 
 roles must be created by system administrators.
 
-**Subdomain Context (Important):**
-- Call from the center's subdomain (e.g., `edu1.mikan.uz`).
-- The invitation code is resolved in that subdomain's context.
-- Same code cannot be used on a different subdomain.
+**Invitation Code:**
+- The invitation code determines which center the new user joins.
+- Same code cannot be reused once claimed.
 
 **Email Uniqueness:**
-Email must be unique **within the center only**. Same email can exist in different centers.
+Email must be unique **across the entire platform**. The same email cannot be used in different centers.
 
 **After Registration:**
 1. Account created with `is_approved=False`.
@@ -91,7 +90,7 @@ Email must be unique **within the center only**. Same email can exist in differe
 
 **Errors:**
 - `400`: Invalid code (not found, expired, already claimed, wrong role).
-- `400`: Email duplicate in this center.
+- `400`: Email already exists on the platform.
 - `429`: Too many registration attempts (brute-force protection).
 """
 
@@ -168,8 +167,8 @@ register_schema = extend_schema(
                     description="OWNER and CENTER_ADMIN roles require admin provisioning.",
                 ),
                 OpenApiExample(
-                    "Email already exists in this center",
-                    value={"email": ["A user with this email already exists in this center."]},
+                    "Email already exists",
+                    value={"email": ["A user with this email already exists."]},
                     response_only=True,
                 ),
                 OpenApiExample(
@@ -191,24 +190,14 @@ register_schema = extend_schema(
 LOGIN_DESCRIPTION = """
 **Obtain JWT access and refresh tokens for authentication.**
 
-Login is tenant-aware and subdomain-sensitive. The Host header determines which
-tenant's user base is queried.
+Users log in through the main domain (mikan.uz). Email is globally unique,
+so the user is identified directly by email. The user's center context is
+carried in the JWT token after authentication.
 
-**Subdomain Context (Critical for Frontend):**
-
-1. **Main Domain** (e.g., `api.mikan.uz`):
-   - Only users with **no center assigned** can log in.
-   - Typically: OWNER role (platform admins).
-   - TEACHER/STUDENT with no center_id cannot log in.
-
-2. **Center Subdomain** (e.g., `edu1.mikan.uz`):
-   - Only users belonging to the center with slug `edu1` can log in.
-   - The slug is derived from the subdomain.
-   - All roles (CENTER_ADMIN, TEACHER, STUDENT, GUEST) supported for that center.
-
-**Important:** Same email can exist in multiple centers. The **Host header** 
-determines which center's user is queried. Always ensure frontend calls login 
-from the same origin the user selected.
+**Login Flow:**
+- User provides email + password on the main domain.
+- Backend authenticates and returns JWT tokens with user info including center_id.
+- Frontend uses center_id to determine routing/UI context.
 
 **Account Eligibility Checks:**
 1. User exists and has correct password.
@@ -241,22 +230,22 @@ login_schema = extend_schema(
     request=LoginSerializer,
     examples=[
         OpenApiExample(
-            "Center user login (subdomain: edu1.mikan.uz)",
+            "Center user login",
             value={
                 "email": "teacher@edu1.com",
                 "password": "SecurePassword123",
             },
             request_only=True,
-            description="Call from the center subdomain. Email must exist in that center.",
+            description="Email must be registered on the platform.",
         ),
         OpenApiExample(
-            "Owner login (main domain: api.mikan.uz)",
+            "Owner login",
             value={
                 "email": "admin@mikan.uz",
                 "password": "AdminPassword456",
             },
             request_only=True,
-            description="Call from main domain. User must have no center assigned.",
+            description="Owner has no center assigned.",
         ),
     ],
     responses={
@@ -866,7 +855,7 @@ USERS_CREATE_DESCRIPTION = """
 **Permission:** CENTER_ADMIN only. Teachers receive 403.
 
 **Required Fields:**
-- `email` (must be unique within this center)
+- `email` (must be unique across the entire platform)
 - `first_name`, `last_name`
 - `role` (one of: "TEACHER", "STUDENT"; GUEST is auto-assigned, OWNER/CENTER_ADMIN via admin)
 - `password` (minimum 6 characters; longer recommended)
@@ -881,7 +870,7 @@ USERS_CREATE_DESCRIPTION = """
 - User can log in after approval.
 
 **Email Uniqueness:**
-Email must be unique within this center only. Same email can exist in other centers.
+Email must be unique across the entire platform. The same email cannot exist in any other center.
 """
 
 USERS_UPDATE_DESCRIPTION = """
@@ -1035,8 +1024,8 @@ user_viewset_schema = extend_schema_view(
                 description="Validation error.",
                 examples=[
                     OpenApiExample(
-                        "Duplicate email in center",
-                        value={"email": ["A user with this email already exists in this center."]},
+                        "Duplicate email",
+                        value={"email": ["A user with this email already exists."]},
                         response_only=True,
                     ),
                     OpenApiExample(

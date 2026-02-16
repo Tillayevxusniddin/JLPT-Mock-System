@@ -77,8 +77,8 @@ CORS_ALLOW_METHODS = [
 ]
 
 # CORS: Set CORS_ALLOWED_ORIGINS in .env for production (comma-separated).
-# Include https://mikan.uz, https://api.mikan.uz, and each tenant subdomain
-# (e.g. https://edu1.mikan.uz). Wildcard *.mikan.uz is not supported; list origins explicitly.
+# Include https://mikan.uz, https://api.mikan.uz, and any frontend origins.
+# Wildcard *.mikan.uz is not supported by CORS; list origins explicitly if needed.
 _cors_origins_from_env = env.list("CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOWED_ORIGINS = _cors_origins_from_env if _cors_origins_from_env else [
     "https://mikan.uz",
@@ -140,7 +140,7 @@ CORS_URLS_REGEX = r'^/(api)/.*$'
 # SESSION_COOKIE_AGE = 86400  # 24 hours
 
 # CSRF Cookie settings
-# Lax is secure for subdomain architecture (.mikan.uz); "None" is only needed
+# Lax is secure for same-site requests (.mikan.uz); "None" is only needed
 # for fully cross-origin frontends (e.g. Netlify on a different TLD).
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
 CSRF_COOKIE_SAMESITE = "Lax"

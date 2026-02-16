@@ -321,14 +321,8 @@ class CenterAdminCreateSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, min_length=6)
 
     def validate_email(self, value):
-        center = self.context.get("center")
-        
-        if User.objects.filter(email=value, center=center).exists():
-            raise serializers.ValidationError("User with this email already exists in this center.")
-
-        if User.objects.filter(email=value, role=User.Role.OWNER).exists():
-            raise serializers.ValidationError("This email is reserved for platform administrators.")
-            
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
         return value
 
     def create(self, validated_data):

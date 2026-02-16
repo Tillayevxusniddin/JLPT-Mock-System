@@ -12,12 +12,13 @@ environ.Env.read_env(BASE_DIR / ".env")
 SECRET_KEY = env("DJANGO_SECRET_KEY", default='default-secret-key$$')
 DEBUG = env.bool("DJANGO_DEBUG", default=True)
 
-# Subdomain-based multi-tenancy support
-# Example: '.mikan.uz' allows all subdomains: edu1.mikan.uz, edu2.mikan.uz, etc.
+# Multi-tenancy: the frontend uses center slugs as URL prefixes (e.g.
+# edu1.mikan.uz) for branding; auth is centralized on the main domain.
+# '.mikan.uz' allows all subdomains so Django accepts requests regardless.
 ALLOWED_HOSTS = env.list(
     "DJANGO_ALLOWED_HOSTS",
     default=[
-        ".mikan.uz",   # Wildcard for all subdomains
+        ".mikan.uz",   # Wildcard for all center slug prefixes
         "mikan.uz",    # Main domain
         "localhost",   # Development
         "127.0.0.1",
@@ -201,7 +202,7 @@ if USE_S3:
     AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default=None)
     
     # Custom domain (optional - for CDN). When set, static/media URLs use this domain.
-    # Ensure bucket CORS allows origins: api.mikan.uz, *.mikan.uz (or list each subdomain).
+    # Ensure bucket CORS allows origins: api.mikan.uz and frontend origins.
     AWS_S3_CUSTOM_DOMAIN = env("AWS_S3_CUSTOM_DOMAIN", default=None)
     
     # Security & Performance
@@ -264,7 +265,7 @@ CORS_ALLOW_HEADERS = [
     "user-agent",
     "x-csrftoken",
     "x-requested-with",
-    # "x-organization-id",  # DEPRECATED: Removed in favor of subdomain-based routing
+    # "x-organization-id",  # DEPRECATED: Removed; tenant is identified via user's center_id in JWT
 ]
 
 
@@ -281,15 +282,6 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@nintei-shiken.co
 FRONTEND_URL_BASE = env("FRONTEND_URL_BASE", default="http://localhost:3000")
 
 AUTH_USER_MODEL = 'authentication.User'
-# Hosts treated as main domain (no center); TenantAwareBackend uses this.
-# Override in production.py or via env if needed (e.g. ["api.example.com"]).
-AUTH_MAIN_DOMAIN_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "mikan.uz",
-    "www.mikan.uz",
-    "api.mikan.uz",
-]
 AUTHENTICATION_BACKENDS = [
     "apps.authentication.backends.TenantAwareBackend",
     "axes.backends.AxesBackend",  # django-axes backend (wraps ModelBackend)

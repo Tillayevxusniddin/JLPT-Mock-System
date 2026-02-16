@@ -1,1 +1,0 @@
-"""Groups app test suite."""
